@@ -13,6 +13,11 @@
 #     name: python3
 # ---
 
+# %% [markdown]
+# # Search-UCI
+# Search UCI datasets for datasets for which the sparse approximation effectively converges. I.e. marglik bound doesn't
+# increase much as we add more inducing points.
+
 # %%
 # ../create_report.sh jpt-test.py
 
@@ -24,22 +29,30 @@ import gpflow
 
 gpflow.config.set_default_positive_minimum(1.0e-5)
 
-# %% [markdown]
-# # Kin40k
-
 # %% {"tags": ["parameters"]}
-MAXITER = 6000
+MAXITER = 1000
 
 experiment_name = "init-inducing"
-dataset_name = "Wilson_elevators"
+dataset_name = "Wilson_solar"
 
 # %%
 experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
-common_run_settings = {"optimizer": "l-bfgs-b"}
+# Want to do things as Hugh did for now, we can always compare to "normalise_on_training": True after.
+common_run_settings = {"optimizer": "bfgs", "normalise_on_training": False, "lengthscale_transform": "constrained",
+                       "cg_pre_optimization": False}
+# common_run_settings = {"optimizer": "l-bfgs-b", "normalise_on_training": False, "lengthscale_transform": "constrained",
+#                        "cg_pre_optimization": False}
+# common_run_settings = {"optimizer": "l-bfgs-b", "normalise_on_training": False}
 # common_run_settings = {"optimizer": "bfgs", "lengthscale_transform": "constrained"}
 
+gpflow.config.set_default_jitter(1e-5)
+
 Ms = dict(
-    Wilson_elevators=[100, 200, 500, 1000, 1500],
+    Wilson_solar=[100, 200, 500],
+    Wilson_concrete=[100, 200, 500, 600, 700, 800, 900],
+    Wilson_pendulum=[10, 100, 200, 500, 567],
+    Wilson_forest=[10, 100, 200, 500],
+    Wilson_energy=[10, 50, 100, 200, 500, 700],
     Wilson_stock=[10, 50, 100, 200, 500],
     Wilson_housing=[100, 200, 300, 400, 500]
 )[dataset_name]
@@ -57,13 +70,23 @@ def print_post_run(run):
 #
 #
 # Baseline runs
-basic_run_settings_list = [{"model_class": "SGPR", "M": M, "fixed_Z": True} for M in Ms]
-baseline_runs = [ExperimentRecord(storage_path=experiment_storage_path, dataset_name=dataset_name,
-                                  **{**run_settings, **common_run_settings})
-                 for run_settings in basic_run_settings_list]
-for i in range(len(baseline_runs)):
-    baseline_runs[i].cached_run(MAXITER)
-    print_post_run(baseline_runs[i])
+print("Baseline run...")
+gpr_exp = ExperimentRecord(storage_path=experiment_storage_path, dataset_name=dataset_name, model_class="GPR",
+                           **{**common_run_settings})
+gpr_exp.cached_run(MAXITER)
+
+#
+#
+# Random init run runs
+# basic_run_settings_list = [{"model_class": "SGPR", "M": M, "fixed_Z": True} for M in Ms]
+# baseline_runs = [ExperimentRecord(storage_path=experiment_storage_path, dataset_name=dataset_name,
+#                                   **{**run_settings, **common_run_settings})
+#                  for run_settings in basic_run_settings_list]
+# for i in range(len(baseline_runs)):
+#     # Initialising from the previous solution does not really change the result, it simply speeds things up.
+#     # Either way, that would be a question of local optima.
+#     baseline_runs[i].cached_run(MAXITER)
+#     print_post_run(baseline_runs[i])
 
 #
 #
@@ -86,10 +109,15 @@ greedy_rmses = [np.mean((exp.model.predict_f(exp.X_test)[0].numpy() - exp.Y_test
                 for exp in greedy_init_runs]
 greedy_nlpps = [-np.mean(exp.model.predict_log_density((exp.X_test, exp.Y_test)))
                 for exp in greedy_init_runs]
-print(greedy_rmses)
-print(greedy_nlpps)
+full_rmse = np.mean((gpr_exp.model.predict_f(gpr_exp.X_test)[0].numpy() - gpr_exp.Y_test) ** 2.0) ** 0.5
+full_nlpp = -np.mean(gpr_exp.model.predict_log_density((gpr_exp.X_test, gpr_exp.Y_test)))
+print(f"gpr rmse: {full_rmse}")
+print(f"rmse    : {greedy_rmses}")
+print(f"gpr nlpp: {full_nlpp}")
+print(f"nlpp    : {greedy_nlpps}")
 
-m_elbo, m_rmse, m_nlpp = baselines.meanpred_baseline(None, greedy_init_runs[0].Y_train, None, greedy_init_runs[0].Y_test)
+m_elbo, m_rmse, m_nlpp = baselines.meanpred_baseline(None, greedy_init_runs[0].Y_train, None,
+                                                     greedy_init_runs[0].Y_test)
 l_elbo, l_rmse, l_nlpp = baselines.linear_baseline(greedy_init_runs[0].X_train, greedy_init_runs[0].Y_train,
                                                    greedy_init_runs[0].X_test, greedy_init_runs[0].Y_test)
 
@@ -103,6 +131,7 @@ ax.set_ylabel("elbo")
 _, ax = plt.subplots()
 # [plt.plot(*r.train_objective_hist) for r in baseline_runs]
 [ax.plot(*r.train_objective_hist) for r in greedy_init_runs]
+ax.axhline(-gpr_exp.model.log_marginal_likelihood().numpy(), linestyle="--")
 ax.axhline(-m_elbo, linestyle=':')
 ax.axhline(-l_elbo, linestyle='-.')
 ax.set_xlabel("iters")

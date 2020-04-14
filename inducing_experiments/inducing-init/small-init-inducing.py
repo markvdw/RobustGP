@@ -35,11 +35,12 @@ dataset_name = "Wilson_elevators"
 
 # %%
 experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
-common_run_settings = {"optimizer": "l-bfgs-b"}
+common_run_settings = {"optimizer": "l-bfgs-b", "normalise_on_training": True}  # True is the old way of doing things, and the more correct one
 # common_run_settings = {"optimizer": "bfgs", "lengthscale_transform": "constrained"}
 
 Ms = dict(
-    Wilson_elevators=[100, 200, 500, 1000, 1500],
+    Wilson_elevators=[100, 200, 500, 1000, 1500, 1750, 2000],
+    # Wilson_elevators=[100, 200, 500, 1000],
     Wilson_stock=[10, 50, 100, 200, 500],
     Wilson_housing=[100, 200, 300, 400, 500]
 )[dataset_name]
@@ -57,13 +58,15 @@ def print_post_run(run):
 #
 #
 # Baseline runs
-basic_run_settings_list = [{"model_class": "SGPR", "M": M, "fixed_Z": True} for M in Ms]
-baseline_runs = [ExperimentRecord(storage_path=experiment_storage_path, dataset_name=dataset_name,
-                                  **{**run_settings, **common_run_settings})
-                 for run_settings in basic_run_settings_list]
-for i in range(len(baseline_runs)):
-    baseline_runs[i].cached_run(MAXITER)
-    print_post_run(baseline_runs[i])
+# basic_run_settings_list = [{"model_class": "SGPR", "M": M, "fixed_Z": True} for M in Ms]
+# baseline_runs = [ExperimentRecord(storage_path=experiment_storage_path, dataset_name=dataset_name,
+#                                   **{**run_settings, **common_run_settings})
+#                  for run_settings in basic_run_settings_list]
+# for i in range(len(baseline_runs)):
+#     # Initialising from the previous solution does not really change the result, it simply speeds things up.
+#     # Either way, that would be a question of local optima.
+#     baseline_runs[i].cached_run(MAXITER)
+#     print_post_run(baseline_runs[i])
 
 #
 #
@@ -123,3 +126,5 @@ ax.set_xlabel("M")
 ax.set_ylabel("nlpp")
 
 plt.show()
+
+# Compare convergence of normalise_on_training on and off

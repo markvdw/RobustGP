@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 from typing import Optional
 
-import gpflow
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 
+import gpflow
 from . import data
 from .storing import store_pickle, load_existing_runs
 
@@ -37,7 +37,7 @@ class LoggerCallback:
 
             self.n_iters.append(self.counter + 1)
             self.log_likelihoods.append(self.loss_function().numpy())
-            print(f"objective function: {self.log_likelihoods[-1]:.4f}")
+            print(f"{self.counter} - objective function: {self.log_likelihoods[-1]:.4f}", end="\r")
 
         self.counter += 1
 
@@ -81,7 +81,7 @@ def greedy_trace_init(kernel, X, M):
     selected_items = list()
     selected_item = np.argmax(di2s)
     selected_items.append(selected_item)
-    while len(selected_items) <= M:
+    while len(selected_items) < M:
         m = len(selected_items) - 1
         ci_optimal = cis[:m, selected_item]
         di_optimal = np.sqrt(di2s[selected_item])
@@ -97,6 +97,10 @@ def greedy_trace_init(kernel, X, M):
     return X[selected_items, :]
 
 
+def normalize(X, X_mean, X_std):
+    return (X - X_mean) / X_std
+
+
 class Experiment:
     def run(self, *args, **kwargs):
         raise NotImplementedError
@@ -107,6 +111,9 @@ class ExperimentRecord(Experiment):
     # = Experiment settings
     storage_path: str
     dataset_name: str
+
+    # - Training set parameters
+    normalise_on_training: Optional[bool] = False
 
     # - Model setup parameters
     model_class: Optional[str] = "SVGP"
@@ -119,6 +126,7 @@ class ExperimentRecord(Experiment):
     init_Z_method: Optional[str] = "first"
 
     # - Optimisation parameters
+    cg_pre_optimization: Optional[bool] = False
     optimizer: Optional[str] = "l-bfgs-b"
     learning_rate: Optional[float] = None
     fixed_Z: Optional[bool] = False
@@ -127,6 +135,8 @@ class ExperimentRecord(Experiment):
     # Populated after running the experiment
     _X_train = None
     _Y_train = None
+    _X_test = None
+    _Y_test = None
     model = None
     train_objective_hist = None
     trained_parameters = None
@@ -136,7 +146,19 @@ class ExperimentRecord(Experiment):
         if type(loaded_data) == tuple:
             self._X_train, self._Y_train = loaded_data[0]
         elif isinstance(loaded_data, data.Dataset):
-            self._X_train, self._Y_train = loaded_data.preprocess_data(loaded_data.X_train, loaded_data.Y_train)
+            if self.normalise_on_training:
+                X_mean, X_std = np.average(loaded_data.X_train, 0)[None, :], 1e-6 + np.std(loaded_data.X_train, 0)[None,
+                                                                                    :]
+                self._X_train = normalize(loaded_data.X_train, X_mean, X_std)
+                self._X_test = normalize(loaded_data.X_test, X_mean, X_std)
+
+                Y_mean, Y_std = np.average(loaded_data.Y_train, 0)[None, :], 1e-6 + np.std(loaded_data.Y_train, 0)[None,
+                                                                                    :]
+                self._Y_train = normalize(loaded_data.Y_train, Y_mean, Y_std)
+                self._Y_test = normalize(loaded_data.Y_test, Y_mean, Y_std)
+            else:
+                self._X_train, self._Y_train = loaded_data.X_train, loaded_data.Y_train
+                self._X_test, self._Y_test = loaded_data.X_test, loaded_data.Y_test
         else:
             raise NotImplementedError
 
@@ -152,6 +174,18 @@ class ExperimentRecord(Experiment):
             self._load_data()
         return self._Y_train
 
+    @property
+    def X_test(self):
+        if self._X_test is None:
+            self._load_data()
+        return self._X_test
+
+    @property
+    def Y_test(self):
+        if self._Y_test is None:
+            self._load_data()
+        return self._Y_test
+
     def cached_run(self, maxiter, init_from_model=None):
         try:
             self.load()
@@ -164,6 +198,8 @@ class ExperimentRecord(Experiment):
         return {"SGPR": gpflow.models.SGPR, "SVGP": gpflow.models.SVGP, "GPR": gpflow.models.GPR}[self.model_class]
 
     def _init_Z(self, X, kernel=None):
+        if self.M > len(X):
+            raise ValueError("Cannot have M > len(X).")
         if self.init_Z_method == "first":
             return X[:self.M, :].copy()
         elif self.init_Z_method == "uniform":
@@ -173,22 +209,24 @@ class ExperimentRecord(Experiment):
         else:
             raise NotImplementedError
 
-    def _init_model(self, init_from_model=None):
+    def _init_model(self, init_from_model=None, load=False):
+        if not load:
+            old_positive_minimum = gpflow.config.default_positive_minimum()
+            gpflow.config.set_default_positive_minimum(old_positive_minimum * 1.01)
         modelclass = self._get_modelclass_from_name()
         if self.kernel_class == "SquaredExponential":
-            kernel = gpflow.kernels.SquaredExponential(lengthscale=np.ones(self.X_train.shape[1]))
+            kernel = gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1]))
             if self.lengthscale_transform == "positive":
                 pass
             elif self.lengthscale_transform == "constrained":
-                constrained_transform = tfp.bijectors.Chain([
-                    tfp.bijectors.AffineScalar(
-                        shift=np.array(gpflow.config.default_positive_minimum(), dtype=np.float64),
-                        scale=np.array(1000.0, dtype=np.float64)),
-                    tfp.bijectors.Sigmoid()
-                ], name="constrained")
-                new_len = gpflow.Parameter(kernel.lengthscale.numpy(), name=kernel.lengthscale.name.split(':')[0],
+                factor = 0.0 if load else 0.01
+                constrained_transform = tfp.bijectors.Sigmoid(
+                    gpflow.utilities.to_default_float(gpflow.config.default_positive_minimum() * (1.0 + factor)),
+                    gpflow.utilities.to_default_float(10.0 * (1.0 - factor))
+                )
+                new_len = gpflow.Parameter(kernel.lengthscales.numpy(), name=kernel.lengthscales.name.split(':')[0],
                                            transform=constrained_transform)
-                kernel.lengthscale = new_len
+                kernel.lengthscales = new_len
             else:
                 raise NotImplementedError
         elif self.kernel_class == "Linear":
@@ -203,15 +241,21 @@ class ExperimentRecord(Experiment):
         else:
             model = modelclass(kernel, gpflow.likelihoods.Gaussian(), init_Z, **self.model_kwargs)
 
+        model.likelihood.variance.assign(0.01)
+        model.kernel.lengthscales.assign(self.X_train.shape[1] ** 0.5 * np.ones(self.X_train.shape[1]))
+
         if init_from_model is not None:
             # Initialise from parameters from init_from_model
             print("Initialising from previous model...")
             init_dict = gpflow.utilities.read_values(init_from_model)
             init_dict.pop(".inducing_variable.Z")
-            init_dict['.kernel.lengthscale'] = np.clip(init_dict['.kernel.lengthscale'], 1e-5, 999.0)
+            init_dict['.kernel.lengthscales'] = np.clip(init_dict['.kernel.lengthscales'], 1e-5, 999.0)
             gpflow.utilities.multiple_assign(model, init_dict)
 
         self.model = model
+
+        if not load:
+            gpflow.config.set_default_positive_minimum(old_positive_minimum)
 
     def _create_loss_function(self, training_dataset):
         if self.model_class in ["SGPR", "GPR"]:
@@ -231,17 +275,25 @@ class ExperimentRecord(Experiment):
         self._init_model(init_from_model)
         model = self.model
 
-        if self.fixed_Z:
-            model.inducing_variable.Z.trainable = False
+        if hasattr(model, 'inducing_variable'):
+            gpflow.utilities.set_trainable(model.inducing_variable.Z, not self.fixed_Z)
 
-        loss_function = self._create_loss_function((self.X_train, self.Y_train))
+        loss_function = self.model.training_loss_closure(compile=True)
         hist = LoggerCallback(model, loss_function)
         if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
             try:
-                gpflow.optimizers.Scipy().minimize(loss_function,
-                                                   variables=self.model.trainable_variables,
-                                                   method=self.optimizer, options={"disp": True, "maxiter": maxiter},
-                                                   step_callback=hist, jit=False)
+                print("Pre optimisation")
+                if self.cg_pre_optimization:
+                    opt = gpflow.optimizers.Scipy()
+                    opt.minimize(loss_function, self.model.trainable_variables, method="CG",
+                                 options=dict(maxiter=30, disp=False), step_callback=hist)
+
+                print("")
+                print("Full optimisation")
+                opt = gpflow.optimizers.Scipy()
+                opt.minimize(loss_function, self.model.trainable_variables, method=self.optimizer,
+                             options=dict(maxiter=10000, disp=False), step_callback=hist)
+                print("")
             except KeyboardInterrupt:
                 pass  # TOOD: Come up with something better than just pass...
         elif self.optimizer == "adam":
@@ -270,7 +322,7 @@ class ExperimentRecord(Experiment):
             print(f"Loading from `{matching_runs[0][1]}`...")
             for k, v in matching_runs[0][0].items():
                 setattr(self, k, v)
-            self._init_model()
+            self._init_model(load=True)
             gpflow.utilities.multiple_assign(self.model, self.trained_parameters)
         elif len(matching_runs) == 0:
             raise FileNotFoundError("No matching run found.")
