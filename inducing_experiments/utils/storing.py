@@ -4,11 +4,11 @@ import re
 from glob import glob
 
 
-def get_next_filename(path, base_filename="data"):
+def get_next_filename(path, base_filename="data", extension="pkl"):
     if not os.path.exists(path):
         os.makedirs(path)
     largest_existing_number = max([int(re.findall(r'\d+', fn)[-1]) for fn in glob(f"{path}/{base_filename}*")] + [0])
-    return f"{path}/{base_filename}{largest_existing_number + 1}.pkl"
+    return f"{path}/{base_filename}{largest_existing_number + 1}.{extension}"
 
 
 def store_pickle(data, base_path, base_filename="data"):
