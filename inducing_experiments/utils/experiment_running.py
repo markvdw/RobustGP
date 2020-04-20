@@ -1,13 +1,15 @@
 from dataclasses import dataclass
+from glob import glob
 from typing import Optional
 
 import gpflow
+import json_tricks
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 
 from . import data
-from .storing import store_pickle, load_existing_runs
+from .storing import get_next_filename
 
 
 def create_loss_function(model, data):
@@ -37,7 +39,7 @@ class LoggerCallback:
 
             self.n_iters.append(self.counter + 1)
             self.log_likelihoods.append(self.loss_function().numpy())
-            print(f"objective function: {self.log_likelihoods[-1]:.4f}")
+            print(f"{self.counter} - objective function: {self.log_likelihoods[-1]:.4f}", end="\r")
 
         self.counter += 1
 
@@ -81,7 +83,7 @@ def greedy_trace_init(kernel, X, M):
     selected_items = list()
     selected_item = np.argmax(di2s)
     selected_items.append(selected_item)
-    while len(selected_items) <= M:
+    while len(selected_items) < M:
         m = len(selected_items) - 1
         ci_optimal = cis[:m, selected_item]
         di_optimal = np.sqrt(di2s[selected_item])
@@ -94,185 +96,318 @@ def greedy_trace_init(kernel, X, M):
         selected_items.append(selected_item)
         if np.sum(di2s) < 1e-10:  # I added this, break optimization if t<1e-10
             break
+    if len(selected_items) < M:
+        unselected_items = [i for i in list(range(len(X))) if i not in selected_items]
+        selected_items.extend(unselected_items[:(M - len(selected_items))])
     return X[selected_items, :]
 
 
-class Experiment:
-    def run(self, *args, **kwargs):
-        raise NotImplementedError
+def normalize(X, X_mean, X_std):
+    return (X - X_mean) / X_std
 
 
 @dataclass
-class ExperimentRecord(Experiment):
-    # = Experiment settings
+class Experiment:
     storage_path: str
-    dataset_name: str
+    base_filename: Optional[str] = "data"
 
-    # - Model setup parameters
-    model_class: Optional[str] = "SVGP"
-    model_kwargs: Optional[dict] = None
-    kernel_class: Optional[str] = "SquaredExponential"
-    lengthscale_transform: Optional[str] = "positive"
-
-    # - Approximation parameters
-    M: Optional[int] = 100
-    init_Z_method: Optional[str] = "first"
-
-    # - Optimisation parameters
-    optimizer: Optional[str] = "l-bfgs-b"
-    learning_rate: Optional[float] = None
-    fixed_Z: Optional[bool] = False
-    restart_id: Optional[int] = 0
-
-    # Populated after running the experiment
-    _X_train = None
-    _Y_train = None
+    # Populated during object life
     model = None
-    train_objective_hist = None
     trained_parameters = None
 
-    def _load_data(self):
-        loaded_data = getattr(data, self.dataset_name)()
-        if type(loaded_data) == tuple:
-            self._X_train, self._Y_train = loaded_data[0]
-        elif isinstance(loaded_data, data.Dataset):
-            self._X_train, self._Y_train = loaded_data.preprocess_data(loaded_data.X_train, loaded_data.Y_train)
-        else:
-            raise NotImplementedError
+    _X_train = None
+    _Y_train = None
+    _X_test = None
+    _Y_test = None
+
+    def load_data(self):
+        raise NotImplementedError
+
+    def setup_model(self):
+        """
+        Set up the model here to the point where existing parameters can be loaded into it. Do not
+        initialise the parameters, as this can be time consuming.
+        :return:
+        """
+        raise NotImplementedError
+
+    def init_params(self):
+        """
+        Do the time consuming parameter initialisation here.
+        :return:
+        """
+        raise NotImplementedError
+
+    def run_optimisation(self):
+        raise NotImplementedError
+
+    def run(self):
+        self.setup_model()
+        self.init_params()
+        self.run_optimisation()
+
+    def cached_run(self):
+        try:
+            self.load()
+            print("Skipping...")
+        except FileNotFoundError:
+            self.run()
+            self.save()
 
     @property
     def X_train(self):
         if self._X_train is None:
-            self._load_data()
+            self.load_data()
         return self._X_train
 
     @property
     def Y_train(self):
         if self._Y_train is None:
-            self._load_data()
+            self.load_data()
         return self._Y_train
 
-    def cached_run(self, maxiter, init_from_model=None):
-        try:
-            self.load()
-            print("Skipping...")
-        except FileNotFoundError:
-            self.run(maxiter, init_from_model=init_from_model)
-            self.save()
+    @property
+    def X_test(self):
+        if self._X_test is None:
+            self.load_data()
+        return self._X_test
 
-    def _get_modelclass_from_name(self):
-        return {"SGPR": gpflow.models.SGPR, "SVGP": gpflow.models.SVGP, "GPR": gpflow.models.GPR}[self.model_class]
+    @property
+    def Y_test(self):
+        if self._Y_test is None:
+            self.load_data()
+        return self._Y_test
 
-    def _init_Z(self, X, kernel=None):
-        if self.init_Z_method == "first":
-            return X[:self.M, :].copy()
-        elif self.init_Z_method == "uniform":
-            return X[np.random.permutation(len(X))[:self.M], :].copy()
-        elif self.init_Z_method == "greedy-trace":
-            return greedy_trace_init(kernel, X, self.M)
-        else:
-            raise NotImplementedError
+    @property
+    def store_variables(self):
+        return [
+            k for k in list(self.__dict__.keys()) if k[0] != "_" and k not in ["storage_path", "base_filename", "model"]
+        ]
 
-    def _init_model(self, init_from_model=None):
-        modelclass = self._get_modelclass_from_name()
-        if self.kernel_class == "SquaredExponential":
-            kernel = gpflow.kernels.SquaredExponential(lengthscale=np.ones(self.X_train.shape[1]))
-            if self.lengthscale_transform == "positive":
-                pass
-            elif self.lengthscale_transform == "constrained":
-                constrained_transform = tfp.bijectors.Chain([
-                    tfp.bijectors.AffineScalar(
-                        shift=np.array(gpflow.config.default_positive_minimum(), dtype=np.float64),
-                        scale=np.array(1000.0, dtype=np.float64)),
-                    tfp.bijectors.Sigmoid()
-                ], name="constrained")
-                new_len = gpflow.Parameter(kernel.lengthscale.numpy(), name=kernel.lengthscale.name.split(':')[0],
-                                           transform=constrained_transform)
-                kernel.lengthscale = new_len
-            else:
-                raise NotImplementedError
-        elif self.kernel_class == "Linear":
-            kernel = gpflow.kernels.Linear(np.ones(self.X_train.shape[1]))
-        else:
-            raise NotImplementedError
-        init_Z = self._init_Z(self.X_train, kernel)
-        if modelclass == gpflow.models.SGPR:
-            model = modelclass((self.X_train, self.Y_train), kernel, inducing_variable=init_Z)
-        elif modelclass == gpflow.models.GPR:
-            model = modelclass((self.X_train, self.Y_train), kernel)
-        else:
-            model = modelclass(kernel, gpflow.likelihoods.Gaussian(), init_Z, **self.model_kwargs)
-
-        if init_from_model is not None:
-            # Initialise from parameters from init_from_model
-            print("Initialising from previous model...")
-            init_dict = gpflow.utilities.read_values(init_from_model)
-            init_dict.pop(".inducing_variable.Z")
-            init_dict['.kernel.lengthscale'] = np.clip(init_dict['.kernel.lengthscale'], 1e-5, 999.0)
-            gpflow.utilities.multiple_assign(model, init_dict)
-
-        self.model = model
-
-    def _create_loss_function(self, training_dataset):
-        if self.model_class in ["SGPR", "GPR"]:
-            # @tf.function(autograph=False)
-            def loss():
-                return -self.model.log_likelihood()
-        else:
-            @tf.function(autograph=False)
-            def loss():
-                return -self.model.log_likelihood(*training_dataset)
-
-        return loss
-
-    def run(self, maxiter, init_from_model=None):
-        print(f"Running {str(self)}")
-
-        self._init_model(init_from_model)
-        model = self.model
-
-        if self.fixed_Z:
-            model.inducing_variable.Z.trainable = False
-
-        loss_function = self._create_loss_function((self.X_train, self.Y_train))
-        hist = LoggerCallback(model, loss_function)
-        if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
-            try:
-                gpflow.optimizers.Scipy().minimize(loss_function,
-                                                   variables=self.model.trainable_variables,
-                                                   method=self.optimizer, options={"disp": True, "maxiter": maxiter},
-                                                   step_callback=hist, jit=False)
-            except KeyboardInterrupt:
-                pass  # TOOD: Come up with something better than just pass...
-        elif self.optimizer == "adam":
-            # adam = tf.optimizers.Adam(learning_rate=run_details["learning_rate"])
-            # run_tf_optimizer(model, adam, (X, Y), maxiter, hist)
-            pass
-        else:
-            raise NotImplementedError(f"I don't know {self.optimizer}")
-
-        # Store results
-        self.trained_parameters = gpflow.utilities.read_values(model)
-        self.train_objective_hist = (hist.n_iters, hist.log_likelihoods)
+    @property
+    def load_match_variables(self):
+        return [k for k in self.store_variables if k not in ["trained_parameters"]]
 
     def save(self):
-        store_pickle({k: v for k, v in self.__dict__.items() if k not in ["model", "training_loss"]}, self.storage_path)
+        store_dict = {k: v for k, v in self.__dict__.items() if k in self.store_variables}
+        json_tricks.dump(store_dict, get_next_filename(self.storage_path, self.base_filename, extension="json"))
 
-    def load(self):
-        existing_runs = load_existing_runs(self.storage_path)
-        # Fields in this object need to match the ones that are stored. If a field exists here that is not stored, it
-        # must have the default value.
-        compare_keys = [k for k in self.__annotations__.keys() if k not in ['storage_path', 'dataset_name']]
-        matching_runs = [(d, fp) for d, fp in existing_runs
-                         if all([self.__dict__[k] == (d[k] if k in d else self.__dataclass_fields__[k].default)
-                                 for k in compare_keys])]
+    def load(self, filename=None):
+        def field_equal(a, b):
+            if type(a) is dict:
+                equality = True
+                try:
+                    for k in a.keys():
+                        if type(a[k]) is np.ndarray:
+                            if not np.all(a[k] == b[k]):
+                                return False
+                        else:
+                            if a[k] != b[k]:
+                                return False
+                except TypeError:
+                    equality = False
+                return equality
+            else:
+                return a == b
+
+        if filename is None:
+            # Find run with similar run parameters
+            existing_runs = []
+            for fn in glob(f"{self.storage_path}/{self.base_filename}*"):
+                existing_runs.append((json_tricks.load(fn), fn))
+
+            matching_runs = [
+                (dict, fn)
+                for dict, fn in existing_runs
+                if all(
+                    [
+                        field_equal(self.__dict__[k], (dict[k] if k in dict else self.__dataclass_fields__[k].default))
+                        for k in self.load_match_variables
+                    ]
+                )
+            ]
+        else:
+            matching_runs = [(json_tricks.load(filename), filename)]
+
         if len(matching_runs) == 1:
             print(f"Loading from `{matching_runs[0][1]}`...")
             for k, v in matching_runs[0][0].items():
                 setattr(self, k, v)
-            self._init_model()
+            gpflow.config.set_default_positive_minimum(0.1 * gpflow.config.default_positive_minimum())
+            self.setup_model()
             gpflow.utilities.multiple_assign(self.model, self.trained_parameters)
         elif len(matching_runs) == 0:
             raise FileNotFoundError("No matching run found.")
         else:
             raise AssertionError("Only one run of an experiment should be present.")
+
+
+@dataclass
+class UciExperiment(Experiment):
+    dataset_name: Optional[str] = "Wilson_elevators"
+
+    def load_data(self):
+        loaded_data = getattr(data, self.dataset_name)()
+        if type(loaded_data) == tuple:
+            self._X_train, self._Y_train = loaded_data[0]
+        elif isinstance(loaded_data, data.Dataset):
+            # Here, we always normalise on training. This is different to before.
+            X_mean, X_std = np.average(loaded_data.X_train, 0)[None, :], 1e-6 + np.std(loaded_data.X_train, 0)[None, :]
+            self._X_train = normalize(loaded_data.X_train, X_mean, X_std)
+            self._X_test = normalize(loaded_data.X_test, X_mean, X_std)
+
+            Y_mean, Y_std = np.average(loaded_data.Y_train, 0)[None, :], 1e-6 + np.std(loaded_data.Y_train, 0)[None, :]
+            self._Y_train = normalize(loaded_data.Y_train, Y_mean, Y_std)
+            self._Y_test = normalize(loaded_data.Y_test, Y_mean, Y_std)
+        else:
+            raise NotImplementedError
+
+
+@dataclass
+class GaussianProcessUciExperiment(UciExperiment):
+    model_class: Optional[str] = "SGPR"
+    M: Optional[int] = None
+    kernel_name: Optional[str] = "SquaredExponential"
+    init_Z_method: Optional[str] = "first"
+    max_lengthscale: Optional[float] = 1000.0
+
+    training_procedure: Optional[str] = "joint"  # joint | reinit
+
+    # Populated during object life
+    optimisation_steps = 0
+    train_objective_hist = None
+
+    def setup_model(self):
+        kernel = self.setup_kernel()
+        if self.model_class == "SGPR":
+            inducing_variable = self.setup_inducing_variable()
+            model = gpflow.models.SGPR((self.X_train, self.Y_train), kernel, inducing_variable=inducing_variable)
+        elif self.model_class == "GPR":
+            assert self.M is None
+            model = gpflow.models.GPR((self.X_train, self.Y_train), kernel)
+        else:
+            raise NotImplementedError
+        self.model = model
+
+    def setup_kernel(self):
+        if self.kernel_name == "SquaredExponential":
+            return gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1]))
+        elif self.kernel_name == "SquaredExponentialLinear":
+            return (gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1])) +
+                    gpflow.kernels.Linear())
+
+    def setup_inducing_variable(self):
+        return gpflow.inducing_variables.InducingPoints(np.zeros((self.M, self.X_train.shape[1])))
+
+    def init_inducing_variable(self):
+        if self.M > len(self.X_train):
+            raise ValueError("Cannot have M > len(X).")
+
+        if self.init_Z_method == "first":
+            Z = self.X_train[:self.M, :].copy()
+        elif self.init_Z_method == "uniform":
+            Z = self.X_train[np.random.permutation(len(self.X_train))[:self.M], :].copy()
+        elif self.init_Z_method == "greedy-trace":
+            Z = greedy_trace_init(self.model.kernel, self.X_train, self.M)
+        else:
+            raise NotImplementedError
+        try:
+            self.model.inducing_variable.Z.assign(Z)
+        except Exception as e:
+            print(type(e))
+            print(e)
+            self.model.inducing_variable.Z = gpflow.Parameter(Z)
+
+    def init_kernel(self):
+        #
+        # Setup lengthscales
+        constrained_transform = tfp.bijectors.Sigmoid(
+            gpflow.utilities.to_default_float(gpflow.config.default_positive_minimum()),
+            gpflow.utilities.to_default_float(self.max_lengthscale),
+        )
+        if self.kernel_name == "SquaredExponential":
+            new_len = gpflow.Parameter(
+                self.model.kernel.lengthscales.numpy(),
+                transform=constrained_transform,
+            )
+            self.model.kernel.lengthscales = new_len
+        elif self.kernel_name == "SquaredExponentialLinear":
+            new_len = gpflow.Parameter(
+                self.model.kernel.kernels[0].lengthscales.numpy(),
+                transform=constrained_transform,
+            )
+            self.model.kernel.kernels[0].lengthscales = new_len
+
+    def init_likelihood(self):
+        self.model.likelihood.variance.assign(0.01)
+
+    def init_model(self):
+        # if self.model_class != "GPR":
+        #     gpflow.utilities.set_trainable(self.model.inducing_variable, self.inducing_variable_trainable)
+        pass
+
+    def init_params(self):
+        if self.model_class != "GPR":
+            self.init_inducing_variable()
+        self.init_kernel()
+        self.init_likelihood()
+        self.init_model()
+
+
+@dataclass
+class FullbatchUciExperiment(GaussianProcessUciExperiment):
+    optimizer: Optional[str] = "l-bfgs-b"
+
+    def run_optimisation(self):
+        print(f"Running {str(self)}")
+
+        model = self.model
+
+        loss_function = self.model.training_loss_closure(compile=True)
+        hist = LoggerCallback(model, loss_function)
+
+        def run_optimisation():
+            if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
+                try:
+                    opt = gpflow.optimizers.Scipy()
+                    opt.minimize(loss_function, self.model.trainable_variables, method=self.optimizer,
+                                 options=dict(maxiter=10000, disp=False), step_callback=hist)
+                    print("")
+                except KeyboardInterrupt:
+                    pass  # TOOD: Come up with something better than just pass...
+            else:
+                raise NotImplementedError(f"I don't know {self.optimizer}")
+
+        if self.training_procedure == "joint":
+            run_optimisation()
+        elif self.training_procedure == "fixed_Z":
+            gpflow.utilities.set_trainable(self.model.inducing_variable, False)
+            run_optimisation()
+        elif self.training_procedure == "reinit_Z":
+            gpflow.utilities.set_trainable(self.model.inducing_variable, False)
+            for i in range(20):
+                reinit = True
+                try:
+                    run_optimisation()
+                except tf.errors.InvalidArgumentError as e:
+                    if e.message[1:9] != "Cholesky":
+                        raise e
+                    self.init_inducing_variable()
+                    print(self.model.elbo().numpy())  # Check whether Cholesky fails
+                    reinit = False
+
+                if reinit:
+                    old_Z = self.model.inducing_variable.Z.numpy().copy()
+                    old_elbo = self.model.elbo().numpy()
+                    self.init_inducing_variable()
+                    if self.model.elbo().numpy() < old_elbo:
+                        # Restore old Z, and finish optimisation
+                        self.model.inducing_variable.Z.assign(old_Z)
+                        print("Stopped reinit_Z procedure because new ELBO was smaller than old ELBO.")
+                        break
+        else:
+            raise NotImplementedError
+
+        # Store results
+        self.trained_parameters = gpflow.utilities.read_values(model)
+        self.train_objective_hist = (hist.n_iters, hist.log_likelihoods)
