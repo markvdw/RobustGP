@@ -193,6 +193,23 @@ class Experiment:
         json_tricks.dump(store_dict, get_next_filename(self.storage_path, self.base_filename, extension="json"))
 
     def load(self, filename=None):
+        def field_equal(a, b):
+            if type(a) is dict:
+                equality = True
+                try:
+                    for k in a.keys():
+                        if type(a[k]) is np.ndarray:
+                            if not np.all(a[k] == b[k]):
+                                return False
+                        else:
+                            if a[k] != b[k]:
+                                return False
+                except TypeError:
+                    equality = False
+                return equality
+            else:
+                return a == b
+
         if filename is None:
             # Find run with similar run parameters
             existing_runs = []
@@ -200,12 +217,11 @@ class Experiment:
                 existing_runs.append((json_tricks.load(fn), fn))
 
             matching_runs = [
-                (loaded_dict, fn)
-                for loaded_dict, fn in existing_runs
+                (dict, fn)
+                for dict, fn in existing_runs
                 if all(
                     [
-                        self.__dict__[k]
-                        == (loaded_dict[k] if k in loaded_dict else self.__dataclass_fields__[k].default)
+                        field_equal(self.__dict__[k], (dict[k] if k in dict else self.__dataclass_fields__[k].default))
                         for k in self.load_match_variables
                     ]
                 )
@@ -252,12 +268,14 @@ class GaussianProcessUciExperiment(UciExperiment):
     model_class: Optional[str] = "SGPR"
     M: Optional[int] = None
     kernel_name: Optional[str] = "SquaredExponential"
-    inducing_variable_trainable: Optional[bool] = False
     init_Z_method: Optional[str] = "first"
     max_lengthscale: Optional[float] = 1000.0
 
+    training_procedure: Optional[str] = "joint"  # joint | reinit
+
     # Populated during object life
     optimisation_steps = 0
+    train_objective_hist = None
 
     def setup_model(self):
         kernel = self.setup_kernel()
@@ -293,7 +311,12 @@ class GaussianProcessUciExperiment(UciExperiment):
             Z = greedy_trace_init(self.model.kernel, self.X_train, self.M)
         else:
             raise NotImplementedError
-        self.model.inducing_variable.Z = gpflow.Parameter(Z)
+        try:
+            self.model.inducing_variable.Z.assign(Z)
+        except Exception as e:
+            print(type(e))
+            print(e)
+            self.model.inducing_variable.Z = gpflow.Parameter(Z)
 
     def init_kernel(self):
         #
@@ -319,8 +342,9 @@ class GaussianProcessUciExperiment(UciExperiment):
         self.model.likelihood.variance.assign(0.01)
 
     def init_model(self):
-        if self.model_class != "GPR":
-            gpflow.utilities.set_trainable(self.model.inducing_variable, self.inducing_variable_trainable)
+        # if self.model_class != "GPR":
+        #     gpflow.utilities.set_trainable(self.model.inducing_variable, self.inducing_variable_trainable)
+        pass
 
     def init_params(self):
         if self.model_class != "GPR":
@@ -341,16 +365,48 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
 
         loss_function = self.model.training_loss_closure(compile=True)
         hist = LoggerCallback(model, loss_function)
-        if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
-            try:
-                opt = gpflow.optimizers.Scipy()
-                opt.minimize(loss_function, self.model.trainable_variables, method=self.optimizer,
-                             options=dict(maxiter=10000, disp=False), step_callback=hist)
-                print("")
-            except KeyboardInterrupt:
-                pass  # TOOD: Come up with something better than just pass...
+
+        def run_optimisation():
+            if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
+                try:
+                    opt = gpflow.optimizers.Scipy()
+                    opt.minimize(loss_function, self.model.trainable_variables, method=self.optimizer,
+                                 options=dict(maxiter=10000, disp=False), step_callback=hist)
+                    print("")
+                except KeyboardInterrupt:
+                    pass  # TOOD: Come up with something better than just pass...
+            else:
+                raise NotImplementedError(f"I don't know {self.optimizer}")
+
+        if self.training_procedure == "joint":
+            run_optimisation()
+        elif self.training_procedure == "fixed_Z":
+            gpflow.utilities.set_trainable(self.model.inducing_variable, False)
+            run_optimisation()
+        elif self.training_procedure == "reinit_Z":
+            gpflow.utilities.set_trainable(self.model.inducing_variable, False)
+            for i in range(20):
+                reinit = True
+                try:
+                    run_optimisation()
+                except tf.errors.InvalidArgumentError as e:
+                    if e.message[1:9] != "Cholesky":
+                        raise e
+                    self.init_inducing_variable()
+                    print(self.model.elbo().numpy())  # Check whether Cholesky fails
+                    reinit = False
+
+                if reinit:
+                    old_Z = self.model.inducing_variable.Z.numpy().copy()
+                    old_elbo = self.model.elbo().numpy()
+                    self.init_inducing_variable()
+                    if self.model.elbo().numpy() < old_elbo:
+                        # Restore old Z, and finish optimisation
+                        self.model.inducing_variable.Z.assign(old_Z)
+                        print("Stopped reinit_Z procedure because new ELBO was smaller than old ELBO.")
+                        break
         else:
-            raise NotImplementedError(f"I don't know {self.optimizer}")
+            raise NotImplementedError
 
         # Store results
         self.trained_parameters = gpflow.utilities.read_values(model)

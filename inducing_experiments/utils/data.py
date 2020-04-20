@@ -2,13 +2,10 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import os
 from shutil import copyfile, rmtree
 
-import numpy as np
-from bayesian_benchmarks import data as bb_data
-from observations.util import maybe_download_and_extract
 from bayesian_benchmarks.data import *
+from observations.util import maybe_download_and_extract
 
 
 def snelson1d(path):
@@ -49,10 +46,8 @@ def snelson1d(path):
     return X, Y
 
 
-def kin40k(dtype=np.float64):
-    data = bb_data.Wilson_kin40k(split=1, prop=0.8)
-    X = data.X_train.astype(dtype)
-    Y = data.Y_train.astype(dtype)
-    Xt = data.X_test.astype(dtype)
-    Yt = data.Y_test.astype(dtype)
-    return (X, Y), (Xt, Yt)
+class Naval_noisy(Naval):
+    def read_data(self):
+        X, Y = super().read_data()
+        Y = Y + np.random.randn(*Y.shape) * 0.0001
+        return X, Y
