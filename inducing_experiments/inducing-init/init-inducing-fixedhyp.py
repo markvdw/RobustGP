@@ -5,10 +5,11 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-import gpflow
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
+
+import gpflow
 from inducing_experiments.utils import baselines, FullbatchUciExperiment, LoggerCallback
 
 gpflow.config.set_default_positive_minimum(1.0e-5)
@@ -16,7 +17,8 @@ gpflow.config.set_default_jitter(1e-10)
 
 init_Z_methods = ["first", "greedy-trace"]
 experiment_name = "init-inducing-fixedhyp"
-dataset_name = "Noisy_naval"
+# dataset_name = "Naval_noisy"
+dataset_name = "Wilson_gas"
 
 # %%
 experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
@@ -24,7 +26,8 @@ experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
 common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0)
 
 Ms, dataset_custom_settings = dict(
-    Naval_noisy=([10, 20, 30, 40, 45, 47, 50, 60, 70, 80, 100, 200, 300, 400, 500], {}),  # Very sparse solution exists
+    Naval_noisy=([10, 20, 30, 40, 45, 47, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100,
+                  130, 150, 180, 200, 250, 300, 400, 500], {}),  # Very sparse solution exists
     Wilson_gas=([100, 200, 500, 1000, 1300], {}),
     # Naval_noisy=([10, 20, 50, 100, 200, 500], {}),  # Very sparse solution exists
 
@@ -59,7 +62,7 @@ dataset_plot_settings = dict(
 baseline_custom_settings = dict(
     Naval_noisy={"model_class": "SGPR", "M": 1000, "training_procedure": "reinit_Z",
                  "init_Z_method": "greedy-trace", "max_lengthscale": 1000.0}
-).get(dataset_name, dict(model_class="GPR"))
+).get(dataset_name, dict(model_class="GPR", max_lengthscale=1000.0))
 
 
 def print_post_run(run):
@@ -81,9 +84,13 @@ def print_post_run(run):
 print("Baseline run...")
 baseline_exp = FullbatchUciExperiment(**{**common_run_settings, **dataset_custom_settings, **baseline_custom_settings})
 baseline_exp.cached_run()
-baseline_lml = baseline_exp.model.elbo().numpy()
+if baseline_exp.model_class == "SGPR":
+    baseline_lml = baseline_exp.model.elbo().numpy()
+else:
+    baseline_lml = baseline_exp.model.log_marginal_likelihood().numpy()
 model_parameters = gpflow.utilities.read_values(baseline_exp.model)
-model_parameters.pop(".inducing_variable.Z")
+if ".inducing_variable.Z" in model_parameters:
+    model_parameters.pop(".inducing_variable.Z")
 
 
 @dataclass
@@ -141,7 +148,8 @@ for init_Z_method in init_Z_methods:
     for run_settings in settings_for_runs:
         run = FullbatchUciInducingOptExperiment(**{**common_run_settings, **run_settings},
                                                 initial_parameters=model_parameters)
-        run.run()
+        run.setup_model()
+        run.init_params()
         print_post_run(run)
         init_Z_runs[init_Z_method].append(run)
 
