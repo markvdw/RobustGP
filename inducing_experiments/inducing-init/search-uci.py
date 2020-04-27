@@ -36,7 +36,8 @@ experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
 
 Ms, dataset_custom_settings = dict(
     Wilson_pol=([100, 200, 500, 1000, 2000], {}),
-    Naval=([10, 20, 50, 100, 200], {}),  # Very sparse solution exists
+    Naval_noisy=([10, 20, 50, 100, 200, 500], {}),  # Very sparse solution exists
+    Naval=([10, 20, 50, 100, 200, 500], {}),  # Very sparse solution exists
     Power=([100, 200, 500, 1000, 2000], {}),  # Step function in it?
     Kin8mn=([100, 200, 500, 1000, 2000], {}),  # Can't download
     Wilson_parkinsons=([100, 200, 500, 1000], {"max_lengthscale": 10.0}),  # Cholesky errors
@@ -75,30 +76,19 @@ def print_post_run(run):
 
 
 common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name,
-                           inducing_variable_trainable=False)
+                           training_procedure="fixed_Z")
 
 #
 #
 # Baseline runs
-print("Baseline run...")
 gpr_exp = FullbatchUciExperiment(**{**common_run_settings, **dataset_custom_settings, "model_class": "GPR"})
 gpr_exp.load_data()
 run_gpr = len(gpr_exp.X_train) <= 5000
 if run_gpr:
+    print("Baseline run...")
     gpr_exp.cached_run()
-
-#
-#
-# Random init run runs
-# basic_run_settings_list = [{"model_class": "SGPR", "M": M, "fixed_Z": True} for M in Ms]
-# baseline_runs = [ExperimentRecord(storage_path=experiment_storage_path, dataset_name=dataset_name,
-#                                   **{**run_settings, **common_run_settings})
-#                  for run_settings in basic_run_settings_list]
-# for i in range(len(baseline_runs)):
-#     # Initialising from the previous solution does not really change the result, it simply speeds things up.
-#     # Either way, that would be a question of local optima.
-#     baseline_runs[i].cached_run(MAXITER)
-#     print_post_run(baseline_runs[i])
+else:
+    print("Skipping baseline run...")
 
 #
 #

@@ -1,13 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field, _MISSING_TYPE
+from functools import reduce
 from glob import glob
 from typing import Optional
 
-import gpflow
 import json_tricks
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 
+import gpflow
 from . import data
 from .storing import get_next_filename
 
@@ -195,17 +196,20 @@ class Experiment:
     def load(self, filename=None):
         def field_equal(a, b):
             if type(a) is dict:
-                equality = True
+                if a == {} and type(b) is _MISSING_TYPE:
+                    return True
                 try:
-                    for k in a.keys():
+                    equality = True
+                    for k in reduce(set.union, map(set, map(dict.keys, [a, b]))):
                         if type(a[k]) is np.ndarray:
                             if not np.all(a[k] == b[k]):
                                 return False
                         else:
                             if a[k] != b[k]:
                                 return False
-                except TypeError:
+                except (TypeError, KeyError):
                     equality = False
+
                 return equality
             else:
                 return a == b
@@ -273,6 +277,8 @@ class GaussianProcessUciExperiment(UciExperiment):
 
     training_procedure: Optional[str] = "joint"  # joint | reinit
 
+    initial_parameters: Optional[dict] = field(default_factory=dict)
+
     # Populated during object life
     optimisation_steps = 0
     train_objective_hist = None
@@ -291,10 +297,14 @@ class GaussianProcessUciExperiment(UciExperiment):
 
     def setup_kernel(self):
         if self.kernel_name == "SquaredExponential":
-            return gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1]))
+            kernel = gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1]))
         elif self.kernel_name == "SquaredExponentialLinear":
-            return (gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1])) +
-                    gpflow.kernels.Linear())
+            kernel = (gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1])) +
+                      gpflow.kernels.Linear())
+        else:
+            raise NotImplementedError
+
+        return kernel
 
     def setup_inducing_variable(self):
         return gpflow.inducing_variables.InducingPoints(np.zeros((self.M, self.X_train.shape[1])))
@@ -318,40 +328,28 @@ class GaussianProcessUciExperiment(UciExperiment):
             print(e)
             self.model.inducing_variable.Z = gpflow.Parameter(Z)
 
-    def init_kernel(self):
-        #
-        # Setup lengthscales
+    def init_params(self):
+        self.model.likelihood.variance.assign(0.01)
+        gpflow.utilities.multiple_assign(self.model, self.initial_parameters)
+
         constrained_transform = tfp.bijectors.Sigmoid(
             gpflow.utilities.to_default_float(gpflow.config.default_positive_minimum()),
             gpflow.utilities.to_default_float(self.max_lengthscale),
         )
+
         if self.kernel_name == "SquaredExponential":
-            new_len = gpflow.Parameter(
-                self.model.kernel.lengthscales.numpy(),
-                transform=constrained_transform,
-            )
+            new_len = gpflow.Parameter(self.model.kernel.lengthscales.numpy(), transform=constrained_transform)
             self.model.kernel.lengthscales = new_len
         elif self.kernel_name == "SquaredExponentialLinear":
-            new_len = gpflow.Parameter(
-                self.model.kernel.kernels[0].lengthscales.numpy(),
-                transform=constrained_transform,
-            )
+            new_len = gpflow.Parameter(self.model.kernel[0].lengthscales.numpy(), transform=constrained_transform)
             self.model.kernel.kernels[0].lengthscales = new_len
 
-    def init_likelihood(self):
-        self.model.likelihood.variance.assign(0.01)
-
-    def init_model(self):
-        # if self.model_class != "GPR":
-        #     gpflow.utilities.set_trainable(self.model.inducing_variable, self.inducing_variable_trainable)
-        pass
-
-    def init_params(self):
-        if self.model_class != "GPR":
+        # TODO: Check if "inducing_variable" is in one of the keys in `self.initial_parameters`, to make things work
+        #       with non `InducingPoints` like inducing variables.
+        if self.model_class != "GPR" and ".inducing_variable.Z" not in self.initial_parameters:
+            # Kernel parameters should be initialised before inducing variables are. If inducing variables are set in
+            # the initial parameters, we shouldn't run this.
             self.init_inducing_variable()
-        self.init_kernel()
-        self.init_likelihood()
-        self.init_model()
 
 
 @dataclass
@@ -371,10 +369,11 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
                 try:
                     opt = gpflow.optimizers.Scipy()
                     opt.minimize(loss_function, self.model.trainable_variables, method=self.optimizer,
-                                 options=dict(maxiter=10000, disp=False), step_callback=hist)
+                                 options=dict(maxiter=10000, disp=True), step_callback=hist)
                     print("")
-                except KeyboardInterrupt:
-                    pass  # TOOD: Come up with something better than just pass...
+                except KeyboardInterrupt as e:
+                    if input("Optimisation aborted. Do you want to re-raise the KeyboardInterrupt? (y/n) ") == 'y':
+                        raise e
             else:
                 raise NotImplementedError(f"I don't know {self.optimizer}")
 
@@ -382,6 +381,7 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
             run_optimisation()
         elif self.training_procedure == "fixed_Z":
             gpflow.utilities.set_trainable(self.model.inducing_variable, False)
+            run_optimisation()
             run_optimisation()
         elif self.training_procedure == "reinit_Z":
             gpflow.utilities.set_trainable(self.model.inducing_variable, False)
@@ -400,7 +400,7 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
                     old_Z = self.model.inducing_variable.Z.numpy().copy()
                     old_elbo = self.model.elbo().numpy()
                     self.init_inducing_variable()
-                    if self.model.elbo().numpy() < old_elbo:
+                    if self.model.elbo().numpy() <= old_elbo:
                         # Restore old Z, and finish optimisation
                         self.model.inducing_variable.Z.assign(old_Z)
                         print("Stopped reinit_Z procedure because new ELBO was smaller than old ELBO.")

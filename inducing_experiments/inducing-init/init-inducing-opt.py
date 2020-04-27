@@ -1,14 +1,19 @@
-# # Inducing point initlaisation fixed hyperparameters
-# Assess how well inducing point initialisation works, with the hyperparameters fixed to the ones found by the full GP.
-# This simplifies things, since we only need to run optimisation with the full GP (or a GP with many inducing points)
+# # Inducing point initlaisation while optimising hypers
+# Assess how well inducing point initialisation works, in conjunction with optimising the hyperparameters.
+# Here, we compare:
+#  - Fixed Z initialised with the initial kernel hyperparameters
+#  -
+#
+# Local optima are a bit annoying when "cold" initialising. They make the plot appear non-smooth. So we initialise at
+
 
 from dataclasses import dataclass
 from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
-import tensorflow as tf
-from inducing_experiments.utils import baselines, FullbatchUciExperiment, LoggerCallback
+import tensorflow_probability as tfp
+from inducing_experiments.utils import baselines, FullbatchUciExperiment
 
 import gpflow
 
@@ -17,19 +22,27 @@ gpflow.config.set_default_jitter(1e-10)
 
 init_Z_methods = ["first", "greedy-trace"]
 experiment_name = "init-inducing-fixedhyp"
-dataset_name = "Naval_noisy"
-# dataset_name = "Wilson_gas"
+# dataset_name = "Naval_noisy"
+dataset_name = "Wilson_gas"
+
+# init_from_baseline = True
+init_from_baseline = False
+
+init_Z_before_hypers = init_from_baseline  # Only if you init from baseline do you need to init Z before hypers
 
 # %%
 experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
 
-common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0)
+common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0,
+                           training_procedure="fixed_Z")
 
 Ms, dataset_custom_settings = dict(
-    Naval_noisy=([10, 20, 30, 40, 45, 47, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100,
-                  130, 150, 180, 200, 250, 300, 400, 500], {}),  # Very sparse solution exists
+    # Naval_noisy=([10, 20, 30, 40, 45, 47, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100,
+    #               130, 150, 180, 200, 250, 300, 400, 500], {}),  # Very sparse solution exists
+    Naval_noisy=([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200, 300, 400, 500], {}),  # Very sparse solution exists
     # Naval_noisy=([10, 20, 50, 100, 200, 500], {}),  # Very sparse solution exists
     Wilson_gas=([100, 200, 500, 1000, 1300], {}),
+    # Naval_noisy=([10, 20, 50, 100, 200, 500], {}),  # Very sparse solution exists
 
     Wilson_pol=([100, 200, 500, 1000, 2000], {}),
     Naval=([10, 20, 50, 100, 200], {}),  # Very sparse solution exists
@@ -62,7 +75,7 @@ dataset_plot_settings = dict(
 baseline_custom_settings = dict(
     Naval_noisy={"model_class": "SGPR", "M": 1000, "training_procedure": "reinit_Z",
                  "init_Z_method": "greedy-trace", "max_lengthscale": 1000.0}
-).get(dataset_name, dict(model_class="GPR", max_lengthscale=1000.0))
+).get(dataset_name, dict(model_class="GPR", training_procedure="joint", max_lengthscale=1000.0))
 
 
 def print_post_run(run):
@@ -88,49 +101,41 @@ if baseline_exp.model_class == "SGPR":
     baseline_lml = baseline_exp.model.elbo().numpy()
 else:
     baseline_lml = baseline_exp.model.log_marginal_likelihood().numpy()
-model_parameters = gpflow.utilities.read_values(baseline_exp.model)
+model_parameters = gpflow.utilities.read_values(baseline_exp.model) if init_from_baseline else {}
 if ".inducing_variable.Z" in model_parameters:
     model_parameters.pop(".inducing_variable.Z")
 
 
 @dataclass
-class FullbatchUciInducingOptExperiment(FullbatchUciExperiment):
-    optimise_objective: Optional[str] = None  # None | lower | upper
+class InitZBeforeHypers(FullbatchUciExperiment):
+    init_Z_before_params: Optional[str] = False
 
-    def run_optimisation(self):
-        print(f"Running {str(self)}")
+    def init_params(self):
+        self.model.likelihood.variance.assign(0.01)
+        if not self.init_Z_before_params:
+            gpflow.utilities.multiple_assign(self.model, self.initial_parameters)
 
-        model = self.model
-        gpflow.utilities.set_trainable(model, False)
-        gpflow.utilities.set_trainable(model.inducing_variable, True)
+        constrained_transform = tfp.bijectors.Sigmoid(
+            gpflow.utilities.to_default_float(gpflow.config.default_positive_minimum()),
+            gpflow.utilities.to_default_float(self.max_lengthscale),
+        )
 
-        if self.optimise_objective is None:
-            return
-        elif self.optimise_objective == "upper":
-            loss_function = tf.function(model.upper_bound)
-        elif self.optimise_objective == "lower":
-            loss_function = self.model.training_loss_closure(compile=True)
-        else:
-            raise NotImplementedError
-        hist = LoggerCallback(model, loss_function)
+        if self.kernel_name == "SquaredExponential":
+            new_len = gpflow.Parameter(self.model.kernel.lengthscales.numpy(), transform=constrained_transform)
+            self.model.kernel.lengthscales = new_len
+        elif self.kernel_name == "SquaredExponentialLinear":
+            new_len = gpflow.Parameter(self.model.kernel[0].lengthscales.numpy(), transform=constrained_transform)
+            self.model.kernel.kernels[0].lengthscales = new_len
 
-        def run_optimisation():
-            if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
-                try:
-                    opt = gpflow.optimizers.Scipy()
-                    opt.minimize(loss_function, self.model.trainable_variables, method=self.optimizer,
-                                 options=dict(maxiter=1000, disp=False), step_callback=hist)
-                    print("")
-                except KeyboardInterrupt:
-                    pass  # TOOD: Come up with something better than just pass...
-            else:
-                raise NotImplementedError(f"I don't know {self.optimizer}")
+        # TODO: Check if "inducing_variable" is in one of the keys in `self.initial_parameters`, to make things work
+        #       with non `InducingPoints` like inducing variables.
+        if self.model_class != "GPR" and ".inducing_variable.Z" not in self.initial_parameters:
+            # Kernel parameters should be initialised before inducing variables are. If inducing variables are set in
+            # the initial parameters, we shouldn't run this.
+            self.init_inducing_variable()
 
-        run_optimisation()
-
-        # Store results
-        self.trained_parameters = gpflow.utilities.read_values(model)
-        self.train_objective_hist = (hist.n_iters, hist.log_likelihoods)
+        if self.init_Z_before_params:
+            gpflow.utilities.multiple_assign(self.model, self.initial_parameters)
 
 
 #
@@ -138,36 +143,33 @@ class FullbatchUciInducingOptExperiment(FullbatchUciExperiment):
 # Sparse runs
 init_Z_runs = {}
 for init_Z_method in init_Z_methods:
-    settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": init_Z_method, **dataset_custom_settings}
+    settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": init_Z_method,
+                          "base_filename": "opthyp-fixed_Z", "initial_parameters": model_parameters,
+                          "init_Z_before_params": init_Z_before_hypers, **dataset_custom_settings}
                          for M in Ms]
     init_Z_runs[init_Z_method] = []
     for run_settings in settings_for_runs:
-        run = FullbatchUciExperiment(**{**common_run_settings, **run_settings}, initial_parameters=model_parameters)
-        run.setup_model()
-        run.init_params()
+        run = InitZBeforeHypers(**{**common_run_settings, **run_settings})
+        run.cached_run()
         print_post_run(run)
         init_Z_runs[init_Z_method].append(run)
 
 #
 #
-# Bound optimisation
-settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": "greedy-trace", **dataset_custom_settings}
-                     for M in Ms]
-init_Z_runs["gradient"] = []
-upper_runs = []
-# for optimise_objective in ["upper", "lower"]:  # Optimising the upper bound makes hardly any difference
-for optimise_objective in ["lower"]:
-    for run_settings in settings_for_runs:
-        run = FullbatchUciInducingOptExperiment(**{**common_run_settings, **run_settings},
-                                                initial_parameters=model_parameters,
-                                                optimise_objective=optimise_objective)
-        run.cached_run()
-        print_post_run(run)
+# Optimisation of Z
 
-        if optimise_objective == "lower":
-            init_Z_runs["gradient"].append(run)
-        elif optimise_objective == "upper":
-            upper_runs.append(run)
+
+settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": "greedy-trace", "training_procedure": "reinit_Z",
+                      "base_filename": "opthyp-reinit_Z", "initial_parameters": model_parameters,
+                      "init_Z_before_params": init_Z_before_hypers, **dataset_custom_settings}
+                     for M in Ms]
+init_Z_runs["reinit_Z"] = []
+for run_settings in settings_for_runs:
+    run = InitZBeforeHypers(**{**common_run_settings, **run_settings})
+    run.cached_run()
+    print_post_run(run)
+
+    init_Z_runs["reinit_Z"].append(run)
 
 #
 #
