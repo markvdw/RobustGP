@@ -7,6 +7,7 @@ import json_tricks
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
+from inducing_init import InducingPointInitializer, FirstSubsample
 
 import gpflow
 from . import data
@@ -272,7 +273,7 @@ class GaussianProcessUciExperiment(UciExperiment):
     model_class: Optional[str] = "SGPR"
     M: Optional[int] = None
     kernel_name: Optional[str] = "SquaredExponential"
-    init_Z_method: Optional[str] = "first"
+    init_Z_method: Optional[InducingPointInitializer] = FirstSubsample()
     max_lengthscale: Optional[float] = 1000.0
 
     training_procedure: Optional[str] = "joint"  # joint | reinit
@@ -313,14 +314,17 @@ class GaussianProcessUciExperiment(UciExperiment):
         if self.M > len(self.X_train):
             raise ValueError("Cannot have M > len(X).")
 
-        if self.init_Z_method == "first":
-            Z = self.X_train[:self.M, :].copy()
-        elif self.init_Z_method == "uniform":
-            Z = self.X_train[np.random.permutation(len(self.X_train))[:self.M], :].copy()
-        elif self.init_Z_method == "greedy-trace":
-            Z = greedy_trace_init(self.model.kernel, self.X_train, self.M)
-        else:
-            raise NotImplementedError
+        # if self.init_Z_method == "first":
+        #     Z = self.X_train[:self.M, :].copy()
+        # elif self.init_Z_method == "uniform":
+        #     Z = self.X_train[np.random.permutation(len(self.X_train))[:self.M], :].copy()
+        # elif self.init_Z_method == "greedy-trace":
+        #     Z = greedy_trace_init(self.model.kernel, self.X_train, self.M)
+        # else:
+        #     raise NotImplementedError
+
+        Z, _ = self.init_Z_method(self.X_train, self.M, self.model.kernel)
+
         try:
             self.model.inducing_variable.Z.assign(Z)
         except Exception as e:

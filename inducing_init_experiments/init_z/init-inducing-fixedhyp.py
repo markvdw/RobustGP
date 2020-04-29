@@ -8,75 +8,53 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-from inducing_experiments.utils import baselines, FullbatchUciExperiment, LoggerCallback
 
 import gpflow
+import inducing_init
+from inducing_init_experiments.init_z.utils import print_post_run, uci_train_settings
+from inducing_init_experiments.utils import baselines, FullbatchUciExperiment, LoggerCallback
 
+#
+#
+# Settings
+dataset_name = "Naval_noisy"
+# dataset_name = "Wilson_gas"
+
+
+#
+#
+# Setup
 gpflow.config.set_default_positive_minimum(1.0e-5)
 gpflow.config.set_default_jitter(1e-10)
 
-init_Z_methods = ["first", "greedy-trace"]
-experiment_name = "init-inducing-fixedhyp"
-dataset_name = "Naval_noisy"
-# dataset_name = "Wilson_gas"
+init_Z_methods = [
+    inducing_init.FirstSubsample(),
+    inducing_init.ConditionalVariance(),
+    inducing_init.ConditionalVariance(sample=True),
+    inducing_init.Kmeans(),
+]
+experiment_name = "init-inducing"
 
 # %%
 experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
 
+baseline_custom_settings = dict(
+    Naval_noisy={"model_class": "SGPR", "M": 1000, "training_procedure": "reinit_Z",
+                 "init_Z_method": inducing_init.ConditionalVariance(sample=False), "max_lengthscale": 1000.0}
+).get(dataset_name, dict(model_class="GPR", max_lengthscale=1000.0))
+
 common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0)
 
-Ms, dataset_custom_settings = dict(
+uci_train_settings.update(dict(
     Naval_noisy=([10, 20, 30, 40, 45, 47, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100,
                   130, 150, 180, 200, 250, 300, 400, 500], {}),  # Very sparse solution exists
     # Naval_noisy=([10, 20, 50, 100, 200, 500], {}),  # Very sparse solution exists
-    Wilson_gas=([100, 200, 500, 1000, 1300], {}),
-
-    Wilson_pol=([100, 200, 500, 1000, 2000], {}),
-    Naval=([10, 20, 50, 100, 200], {}),  # Very sparse solution exists
-    Power=([100, 200, 500, 1000, 2000], {}),  # Step function in it?
-    Kin8mn=([100, 200, 500, 1000, 2000], {}),  # Can't download
-    Wilson_parkinsons=([100, 200, 500, 1000], {"max_lengthscale": 10.0}),  # Cholesky errors
-    Wilson_sml=([100, 200, 500, 1000, 2000, 3000, 3500], {}),  # Mostly linear, but with benefit of nonlinear
-    # Didn't get SE+Lin working, probably local optimum
-    # Wilson_skillcraft=([10, 20, 50, 100, 200, 500], {"kernel_name": "SquaredExponentialLinear"}),
-    Wilson_skillcraft=([10, 20, 50, 100, 200, 500, 1000], {}),  # Mostly linear, but with benefit of nonlinear
-    Wilson_wine=([100, 200, 500, 1000, 1300], {}),  # Suddenly catches good hypers with large M
-    Wilson_airfoil=([100, 200, 500, 1000, 1250, 1300, 1340], {}),  # Good
-    Wilson_solar=([100, 200, 300],
-                  {"kernel_name": "SquaredExponentialLinear", "max_lengthscale": 10.0}),  # Mostly linear
-    # Good, better performance with Linear kernel added
-    # Wilson_concrete=([100, 200, 500, 600, 700, 800, 900],
-    #                  {"kernel_name": "SquaredExponentialLinear", "optimizer": "bfgs", "max_lengthscale": 10.0}),
-    Wilson_concrete=([100, 200, 500, 600, 700, 800, 900], {}),
-    Wilson_pendulum=([10, 100, 200, 500, 567], {}),  # Reasonable, very low noise
-    Wilson_forest=([10, 100, 200, 400], {"kernel_name": "SquaredExponentialLinear"}),  # Bad
-    Wilson_energy=([10, 50, 100, 200, 500], {}),  # Good
-    Wilson_stock=([10, 50, 100, 200, 400, 450], {"kernel_name": "SquaredExponentialLinear"}),  # Mostly linear
-    Wilson_housing=([100, 200, 300, 400], {})  # Bad
-)[dataset_name]
+))
+Ms, dataset_custom_settings = uci_train_settings[dataset_name]
 
 dataset_plot_settings = dict(
     Naval_noisy=dict(elbo_ylim=(-20e3, 45e3))
 ).get(dataset_name, dict(elbo_ylim=None))
-
-baseline_custom_settings = dict(
-    Naval_noisy={"model_class": "SGPR", "M": 1000, "training_procedure": "reinit_Z",
-                 "init_Z_method": "greedy-trace", "max_lengthscale": 1000.0}
-).get(dataset_name, dict(model_class="GPR", max_lengthscale=1000.0))
-
-
-def print_post_run(run):
-    print("")
-    try:
-        std_ratio = (run.model.kernel.variance.numpy() / run.model.likelihood.variance.numpy()) ** 0.5
-        print(f"(kernel.variance / likelihood.variance)**0.5: {std_ratio}")
-        print(run.model.kernel.lengthscales.numpy())
-        print(f"ELBO: {run.model.elbo().numpy()}")
-    except AttributeError:
-        pass
-    print("")
-    print("")
-
 
 #
 #
@@ -140,18 +118,20 @@ init_Z_runs = {}
 for init_Z_method in init_Z_methods:
     settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": init_Z_method, **dataset_custom_settings}
                          for M in Ms]
-    init_Z_runs[init_Z_method] = []
+    init_Z_runs[str(init_Z_method)] = []
     for run_settings in settings_for_runs:
         run = FullbatchUciExperiment(**{**common_run_settings, **run_settings}, initial_parameters=model_parameters)
+        print(run)
         run.setup_model()
         run.init_params()
         print_post_run(run)
-        init_Z_runs[init_Z_method].append(run)
+        init_Z_runs[str(init_Z_method)].append(run)
 
 #
 #
 # Bound optimisation
-settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": "greedy-trace", **dataset_custom_settings}
+settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": inducing_init.ConditionalVariance(sample=True),
+                      **dataset_custom_settings}
                      for M in Ms]
 init_Z_runs["gradient"] = []
 upper_runs = []
@@ -161,6 +141,7 @@ for optimise_objective in ["lower"]:
         run = FullbatchUciInducingOptExperiment(**{**common_run_settings, **run_settings},
                                                 initial_parameters=model_parameters,
                                                 optimise_objective=optimise_objective)
+        print(run)
         run.cached_run()
         print_post_run(run)
 
@@ -204,7 +185,7 @@ print(f"rmse    : {init_Z_rmses}")
 print(f"gpr nlpp: {full_nlpp}")
 print(f"nlpp    : {init_Z_nlpps}")
 
-_, ax = plt.subplots()
+fig, ax = plt.subplots()
 for method in init_Z_runs.keys():
     l, = ax.plot(Ms, init_Z_elbos[method], label=f"{method} elbo")
     ax.plot(Ms, init_Z_uppers[method], label=f"{method} upper", color=l.get_color(), linestyle=(0, (3, 1, 1, 1, 1, 1)))
@@ -215,8 +196,9 @@ ax.legend()
 ax.set_xlabel("M")
 ax.set_ylabel("elbo")
 ax.set_ylim(dataset_plot_settings["elbo_ylim"])
+fig.savefig(f"./figures/fixedhyp-{dataset_name}-elbo.png")
 
-_, ax = plt.subplots()
+fig, ax = plt.subplots()
 for method in init_Z_runs.keys():
     ax.plot(Ms, init_Z_rmses[method], label=method)
 ax.axhline(full_rmse, label="full GP", linestyle='--')
@@ -225,8 +207,9 @@ ax.axhline(m_rmse, label="mean", linestyle=':')
 ax.legend()
 ax.set_xlabel("M")
 ax.set_ylabel("rmse")
+fig.savefig(f"./figures/fixedhyp-{dataset_name}-rmse.png")
 
-_, ax = plt.subplots()
+fig, ax = plt.subplots()
 for method in init_Z_runs.keys():
     ax.plot(Ms, init_Z_nlpps[method], label=method)
 ax.axhline(full_nlpp, label="full GP", linestyle='--')
@@ -235,5 +218,6 @@ ax.axhline(m_nlpp, label="mean", linestyle=':')
 ax.legend()
 ax.set_xlabel("M")
 ax.set_ylabel("nlpp")
+fig.savefig(f"./figures/fixedhyp-{dataset_name}-nlpp.png")
 
 plt.show()
