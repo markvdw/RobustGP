@@ -8,6 +8,8 @@ requirements = [
     'observations',
     'jupytext',
     'papermill',
+    'json_tricks',
+    'jug'
 ]
 
 setup(
