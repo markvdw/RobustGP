@@ -4,8 +4,9 @@ from __future__ import print_function
 
 from shutil import copyfile, rmtree
 
-from bayesian_benchmarks.data import *
 from observations.util import maybe_download_and_extract
+
+from bayesian_benchmarks.data import *
 
 
 def snelson1d(path):
@@ -50,4 +51,18 @@ class Naval_noisy(Naval):
     def read_data(self):
         X, Y = super().read_data()
         Y = Y + np.random.randn(*Y.shape) * 0.0001
+        return X, Y
+
+
+class Pendulum_noisy(Wilson_pendulum):
+    def read_data(self):
+        X, Y = super().read_data()
+        Y = Y + np.random.randn(*Y.shape) * 0.1
+        return X, Y
+
+
+class Parkinsons_noisy(Wilson_parkinsons):
+    def read_data(self):
+        X, Y = super().read_data()
+        Y = Y + np.random.randn(*Y.shape) * 1e-1
         return X, Y

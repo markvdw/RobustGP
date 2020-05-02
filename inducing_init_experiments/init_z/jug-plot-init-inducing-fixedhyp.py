@@ -13,7 +13,6 @@ import matplotlib.pyplot as plt
 from inducing_init_experiments.utils import baselines
 
 jug.init("jug_init_inducing_fixedhyp.py", "jug_init_inducing_fixedhyp.jugdata")
-# import jug_init_inducing_fixedhyp
 from jug_init_inducing_fixedhyp import (
     init_Z_runs, init_Z_task_results, baseline_exp, full_rmse, full_nlpp, baseline_lml, Ms, dataset_name
 )

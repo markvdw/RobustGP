@@ -1,3 +1,4 @@
+import datetime
 from dataclasses import dataclass, field, _MISSING_TYPE
 from functools import reduce
 from glob import glob
@@ -7,9 +8,9 @@ import json_tricks
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
-from inducing_init import InducingPointInitializer, FirstSubsample
 
 import gpflow
+from inducing_init import InducingPointInitializer, FirstSubsample
 from . import data
 from .storing import get_next_filename
 
@@ -40,7 +41,8 @@ class LoggerCallback:
                     var.assign(val)
 
             self.n_iters.append(self.counter + 1)
-            self.log_likelihoods.append(self.loss_function().numpy())
+            loss = self.loss_function().numpy()
+            self.log_likelihoods.append(loss)
             print(f"{self.counter} - objective function: {self.log_likelihoods[-1]:.4f}", end="\r")
 
         self.counter += 1
@@ -192,7 +194,9 @@ class Experiment:
 
     def save(self):
         store_dict = {k: v for k, v in self.__dict__.items() if k in self.store_variables}
-        json_tricks.dump(store_dict, get_next_filename(self.storage_path, self.base_filename, extension="json"))
+        filename = get_next_filename(self.storage_path, self.base_filename, extension="json")
+        json_tricks.dump(store_dict, filename)
+        print(f"Stored results in {filename} at {datetime.datetime.now()}")
 
     def load(self, filename=None):
         def field_equal(a, b):
@@ -356,6 +360,54 @@ class GaussianProcessUciExperiment(UciExperiment):
             self.init_inducing_variable()
 
 
+from gpflow.optimizers.scipy import LossClosure, Variables, Tuple, _compute_loss_and_gradients, Callable
+
+
+class RobustScipy(gpflow.optimizers.Scipy):
+    def __init__(self, jitter_parameter: gpflow.Parameter):
+        self.jitter_parameter = jitter_parameter
+
+    def eval_func(
+            self, closure: LossClosure, variables: Variables, compile: bool = True
+    ) -> Callable[[np.ndarray], Tuple[np.ndarray, np.ndarray]]:
+        def _tf_eval(x: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
+            values = self.unpack_tensors(variables, x)
+            self.assign_tensors(variables, values)
+
+            loss, grads = _compute_loss_and_gradients(closure, variables)
+            return loss, self.pack_tensors(grads)
+
+        if compile:
+            _tf_eval = tf.function(_tf_eval)
+
+        def _eval(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+            try:
+                loss, grad = _tf_eval(tf.convert_to_tensor(x))
+            except tf.errors.InvalidArgumentError as e:
+                if e.message[1:9] != "Cholesky":
+                    raise e
+                print(f"Warning: CholeskyError. Attempting to continue.", end='')
+                original_jitter = self.jitter_parameter.numpy()
+                loss = None
+                for jitter in np.logspace(1, 7, 7) * gpflow.default_jitter():
+                    self.jitter_parameter.assign(jitter)
+                    print(f"{jitter:.2e}", end=" ")
+                    try:
+                        loss, grad = _tf_eval(tf.convert_to_tensor(x))
+                        self.jitter_parameter.assign(original_jitter)
+                        break
+                    except tf.errors.InvalidArgumentError as e_inner:
+                        if e_inner.message[1:9] != "Cholesky":
+                            raise e_inner
+                if loss is None:
+                    print("Jittering didn't solve the problem...")
+                    raise e
+                print("")
+            return loss.numpy().astype(np.float64), grad.numpy().astype(np.float64)
+
+        return _eval
+
+
 @dataclass
 class FullbatchUciExperiment(GaussianProcessUciExperiment):
     optimizer: Optional[str] = "l-bfgs-b"
@@ -365,13 +417,28 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
 
         model = self.model
 
+        def jittered_elbo():
+            for jitter in np.logspace(0, 6, 7) * gpflow.default_jitter():
+                try:
+                    original_jitter = model.jitter_variance.numpy()
+                    model.jitter_variance.assign(jitter)
+                    elbo = self.model.elbo()
+                    model.jitter_variance.assign(original_jitter)
+                    break
+                except tf.errors.InvalidArgumentError as e:
+                    print(e.message)
+                    if e.message[0:8] != "Cholesky":
+                        raise e
+            return elbo
+
         loss_function = self.model.training_loss_closure(compile=True)
-        hist = LoggerCallback(model, loss_function)
+        # loss_function = tf.function(lambda jitter=None: -self.model.elbo(jitter))
+        hist = LoggerCallback(model, lambda: -jittered_elbo())
 
         def run_optimisation():
             if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
                 try:
-                    opt = gpflow.optimizers.Scipy()
+                    opt = gpflow.optimizers.Scipy() if self.model_class == "GPR" else RobustScipy(model.jitter_variance)
                     opt.minimize(loss_function, self.model.trainable_variables, method=self.optimizer,
                                  options=dict(maxiter=10000, disp=True), step_callback=hist)
                     print("")
@@ -402,9 +469,9 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
 
                 if reinit:
                     old_Z = self.model.inducing_variable.Z.numpy().copy()
-                    old_elbo = self.model.elbo().numpy()
+                    old_elbo = jittered_elbo()
                     self.init_inducing_variable()
-                    if self.model.elbo().numpy() <= old_elbo:
+                    if jittered_elbo() <= old_elbo:
                         # Restore old Z, and finish optimisation
                         self.model.inducing_variable.Z.assign(old_Z)
                         print("Stopped reinit_Z procedure because new ELBO was smaller than old ELBO.")

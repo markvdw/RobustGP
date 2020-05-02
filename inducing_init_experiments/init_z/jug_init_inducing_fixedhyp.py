@@ -128,12 +128,12 @@ model_parameters, full_rmse, full_nlpp, baseline_lml = jug.bvalue(run_baseline(b
 
 #
 #
-# Blah
+# Sparse experiments
 init_Z_runs = {}
 init_Z_task_results = {}
 
 
-# Sparse exps
+# Simple initialisation
 @jug.TaskGenerator
 def run_sparse_init(exp):
     print(exp)
