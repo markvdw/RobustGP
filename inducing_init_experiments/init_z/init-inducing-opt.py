@@ -24,15 +24,14 @@ from inducing_init_experiments.utils import baselines, FullbatchUciExperiment
 #
 #
 # Settings
-dataset_name = "Naval_noisy"
-# dataset_name = "Wilson_gas"
+# dataset_name = "Naval_noisy"
+dataset_name = "Wilson_gas"
 # init_from_baseline = True
 init_from_baseline = False
 
 #
 #
 # Setup
-gpflow.config.set_default_positive_minimum(1.0e-5)
 gpflow.config.set_default_jitter(1e-10)
 
 init_Z_methods = [

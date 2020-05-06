@@ -11,6 +11,9 @@ import tensorflow_probability as tfp
 
 import gpflow
 from inducing_init import InducingPointInitializer, FirstSubsample
+from inducing_init.models import RobustGPR, RobustSGPR
+from inducing_init.optimizers import RobustScipy
+from inducing_init.utilities import set_trainable
 from . import data
 from .storing import get_next_filename
 
@@ -91,7 +94,7 @@ def greedy_trace_init(kernel, X, M):
         m = len(selected_items) - 1
         ci_optimal = cis[:m, selected_item]
         di_optimal = np.sqrt(di2s[selected_item])
-        new_X = X[selected_item:selected_item + 1, :]
+        new_X = X[selected_item : selected_item + 1, :]
         elements = kernel.K(new_X, X)[0, :]
         eis = (elements - np.dot(ci_optimal, cis[:m, :])) / di_optimal
         cis[m, :] = eis
@@ -102,7 +105,7 @@ def greedy_trace_init(kernel, X, M):
             break
     if len(selected_items) < M:
         unselected_items = [i for i in list(range(len(X))) if i not in selected_items]
-        selected_items.extend(unselected_items[:(M - len(selected_items))])
+        selected_items.extend(unselected_items[: (M - len(selected_items))])
     return X[selected_items, :]
 
 
@@ -242,7 +245,7 @@ class Experiment:
             print(f"Loading from `{matching_runs[0][1]}`...")
             for k, v in matching_runs[0][0].items():
                 setattr(self, k, v)
-            gpflow.config.set_default_positive_minimum(0.1 * gpflow.config.default_positive_minimum())
+            gpflow.config.set_default_positive_minimum(1e-7)
             self.setup_model()
             gpflow.utilities.multiple_assign(self.model, self.trained_parameters)
         elif len(matching_runs) == 0:
@@ -292,20 +295,23 @@ class GaussianProcessUciExperiment(UciExperiment):
         kernel = self.setup_kernel()
         if self.model_class == "SGPR":
             inducing_variable = self.setup_inducing_variable()
-            model = gpflow.models.SGPR((self.X_train, self.Y_train), kernel, inducing_variable=inducing_variable)
+            model = RobustSGPR((self.X_train, self.Y_train), kernel, inducing_variable=inducing_variable)
         elif self.model_class == "GPR":
             assert self.M is None
-            model = gpflow.models.GPR((self.X_train, self.Y_train), kernel)
+            model = RobustGPR((self.X_train, self.Y_train), kernel)
         else:
             raise NotImplementedError
+        print(f"Jitter variance: {np.log10(model.jitter_variance.numpy()):.1f}")
+        model.likelihood.variance = gpflow.Parameter(1.0, transform=gpflow.utilities.positive())
         self.model = model
 
     def setup_kernel(self):
         if self.kernel_name == "SquaredExponential":
             kernel = gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1]))
         elif self.kernel_name == "SquaredExponentialLinear":
-            kernel = (gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1])) +
-                      gpflow.kernels.Linear())
+            kernel = (
+                gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1])) + gpflow.kernels.Linear()
+            )
         else:
             raise NotImplementedError
 
@@ -337,6 +343,8 @@ class GaussianProcessUciExperiment(UciExperiment):
             self.model.inducing_variable.Z = gpflow.Parameter(Z)
 
     def init_params(self):
+        # if self.model_class == "GPR":
+        #     self.model.likelihood.variance = gpflow.Parameter(1.0, transform=gpflow.utilities.positive(1e-4))
         self.model.likelihood.variance.assign(0.01)
         gpflow.utilities.multiple_assign(self.model, self.initial_parameters)
 
@@ -349,7 +357,7 @@ class GaussianProcessUciExperiment(UciExperiment):
             new_len = gpflow.Parameter(self.model.kernel.lengthscales.numpy(), transform=constrained_transform)
             self.model.kernel.lengthscales = new_len
         elif self.kernel_name == "SquaredExponentialLinear":
-            new_len = gpflow.Parameter(self.model.kernel[0].lengthscales.numpy(), transform=constrained_transform)
+            new_len = gpflow.Parameter(self.model.kernel.kernels[0].lengthscales.numpy(), transform=constrained_transform)
             self.model.kernel.kernels[0].lengthscales = new_len
 
         # TODO: Check if "inducing_variable" is in one of the keys in `self.initial_parameters`, to make things work
@@ -358,54 +366,6 @@ class GaussianProcessUciExperiment(UciExperiment):
             # Kernel parameters should be initialised before inducing variables are. If inducing variables are set in
             # the initial parameters, we shouldn't run this.
             self.init_inducing_variable()
-
-
-from gpflow.optimizers.scipy import LossClosure, Variables, Tuple, _compute_loss_and_gradients, Callable
-
-
-class RobustScipy(gpflow.optimizers.Scipy):
-    def __init__(self, jitter_parameter: gpflow.Parameter):
-        self.jitter_parameter = jitter_parameter
-
-    def eval_func(
-            self, closure: LossClosure, variables: Variables, compile: bool = True
-    ) -> Callable[[np.ndarray], Tuple[np.ndarray, np.ndarray]]:
-        def _tf_eval(x: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
-            values = self.unpack_tensors(variables, x)
-            self.assign_tensors(variables, values)
-
-            loss, grads = _compute_loss_and_gradients(closure, variables)
-            return loss, self.pack_tensors(grads)
-
-        if compile:
-            _tf_eval = tf.function(_tf_eval)
-
-        def _eval(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-            try:
-                loss, grad = _tf_eval(tf.convert_to_tensor(x))
-            except tf.errors.InvalidArgumentError as e:
-                if e.message[1:9] != "Cholesky":
-                    raise e
-                print(f"Warning: CholeskyError. Attempting to continue.", end='')
-                original_jitter = self.jitter_parameter.numpy()
-                loss = None
-                for jitter in np.logspace(1, 7, 7) * gpflow.default_jitter():
-                    self.jitter_parameter.assign(jitter)
-                    print(f"{jitter:.2e}", end=" ")
-                    try:
-                        loss, grad = _tf_eval(tf.convert_to_tensor(x))
-                        self.jitter_parameter.assign(original_jitter)
-                        break
-                    except tf.errors.InvalidArgumentError as e_inner:
-                        if e_inner.message[1:9] != "Cholesky":
-                            raise e_inner
-                if loss is None:
-                    print("Jittering didn't solve the problem...")
-                    raise e
-                print("")
-            return loss.numpy().astype(np.float64), grad.numpy().astype(np.float64)
-
-        return _eval
 
 
 @dataclass
@@ -417,33 +377,26 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
 
         model = self.model
 
-        def jittered_elbo():
-            for jitter in np.logspace(0, 6, 7) * gpflow.default_jitter():
-                try:
-                    original_jitter = model.jitter_variance.numpy()
-                    model.jitter_variance.assign(jitter)
-                    elbo = self.model.elbo()
-                    model.jitter_variance.assign(original_jitter)
-                    break
-                except tf.errors.InvalidArgumentError as e:
-                    print(e.message)
-                    if e.message[0:8] != "Cholesky":
-                        raise e
-            return elbo
-
         loss_function = self.model.training_loss_closure(compile=True)
+        robust_loss_function = lambda: -self.model.robust_maximum_log_likelihood_objective()
         # loss_function = tf.function(lambda jitter=None: -self.model.elbo(jitter))
-        hist = LoggerCallback(model, lambda: -jittered_elbo())
+        hist = LoggerCallback(model, robust_loss_function)
 
         def run_optimisation():
             if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
                 try:
-                    opt = gpflow.optimizers.Scipy() if self.model_class == "GPR" else RobustScipy(model.jitter_variance)
-                    opt.minimize(loss_function, self.model.trainable_variables, method=self.optimizer,
-                                 options=dict(maxiter=10000, disp=True), step_callback=hist)
+                    opt = RobustScipy()
+                    opt.minimize(
+                        loss_function,
+                        self.model.trainable_variables,
+                        robust_closure=robust_loss_function,
+                        method=self.optimizer,
+                        options=dict(maxiter=10000, disp=True),
+                        step_callback=hist,
+                    )
                     print("")
                 except KeyboardInterrupt as e:
-                    if input("Optimisation aborted. Do you want to re-raise the KeyboardInterrupt? (y/n) ") == 'y':
+                    if input("Optimisation aborted. Do you want to re-raise the KeyboardInterrupt? (y/n) ") == "y":
                         raise e
             else:
                 raise NotImplementedError(f"I don't know {self.optimizer}")
@@ -451,11 +404,11 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
         if self.training_procedure == "joint":
             run_optimisation()
         elif self.training_procedure == "fixed_Z":
-            gpflow.utilities.set_trainable(self.model.inducing_variable, False)
+            set_trainable(self.model.inducing_variable, False)
             run_optimisation()
             run_optimisation()
         elif self.training_procedure == "reinit_Z":
-            gpflow.utilities.set_trainable(self.model.inducing_variable, False)
+            set_trainable(self.model.inducing_variable, False)
             for i in range(20):
                 reinit = True
                 try:
@@ -469,9 +422,9 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
 
                 if reinit:
                     old_Z = self.model.inducing_variable.Z.numpy().copy()
-                    old_elbo = jittered_elbo()
+                    old_elbo = self.model.robust_maximum_log_likelihood_objective()
                     self.init_inducing_variable()
-                    if jittered_elbo() <= old_elbo:
+                    if self.model.robust_maximum_log_likelihood_objective() <= old_elbo:
                         # Restore old Z, and finish optimisation
                         self.model.inducing_variable.Z.assign(old_Z)
                         print("Stopped reinit_Z procedure because new ELBO was smaller than old ELBO.")

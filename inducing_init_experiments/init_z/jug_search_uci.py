@@ -7,10 +7,10 @@ import numpy as np
 
 import gpflow
 import inducing_init
-from inducing_init_experiments.init_z.utils import uci_train_settings, print_post_run
+from inducing_init_experiments.init_z.utils import uci_train_settings, good_datasets, print_post_run
 from inducing_init_experiments.utils import FullbatchUciExperiment
 
-gpflow.likelihoods.Gaussian.DEFAULT_VARIANCE_LOWER_BOUND = 1e-4
+gpflow.config.set_default_jitter(1e-8)
 gpflow.config.set_default_positive_minimum(1.0e-5)
 
 MAXITER = 1000
@@ -18,7 +18,11 @@ MAXITER = 1000
 experiment_name = "search-uci"
 # dataset_names = ["Wilson_energy", "Wilson_pendulum", "Pendulum_noisy", "Wilson_concrete", "Wilson_airfoil",
 #                  "Wilson_wine", "Wilson_skillcraft", "Wilson_sml", "Wilson_parkinsons", "Parkinsons_noisy"]
-dataset_names = ["Wilson_parkinsons", "Parkinsons_noisy", "Power", "Wilson_pol", "Wilson_elevators", "Wilson_bike"]
+dataset_names = ["Wilson_stock", "Wilson_energy", "Pendulum_noisy", "Wilson_pendulum", "Wilson_concrete",
+                 "Wilson_airfoil", "Wilson_wine", "Naval_noisy", "Naval", "Wilson_gas", "Wilson_skillcraft",
+                 "Wilson_sml", "Wilson_parkinsons", "Parkinsons_noisy", "Power", "Wilson_pol", "Wilson_elevators",
+                 "Wilson_bike"]
+# dataset_names = good_datasets
 
 Z_init_method = inducing_init.ConditionalVariance(sample=True)
 
@@ -40,14 +44,15 @@ def get_settings(dataset_name):
 def full_cached_run(exp):
     exp.cached_run()
     print_post_run(exp)
-    return exp.model.log_marginal_likelihood().numpy()
+    return exp.model.robust_maximum_log_likelihood_objective()
 
 
 @jug.TaskGenerator
 def sparse_cached_run(exp):
     exp.cached_run()
     print_post_run(exp)
-    lml = exp.model.log_marginal_likelihood().numpy() if exp.model_class == "GPR" else exp.model.elbo().numpy()
+    # lml = exp.model.log_marginal_likelihood().numpy() if exp.model_class == "GPR" else exp.model.elbo().numpy()
+    lml = exp.model.robust_maximum_log_likelihood_objective(restore_jitter=False).numpy()
     upper = exp.model.upper_bound().numpy()
     return lml, upper, 0.0, 0.0
 
@@ -61,7 +66,7 @@ for dataset_name in dataset_names:
     gpr_exp = FullbatchUciExperiment(**{**common_run_settings, **dataset_custom_settings, "model_class": "GPR",
                                         "training_procedure": "joint"})
     gpr_exp.load_data()
-    if len(gpr_exp.X_train) <= 5000:
+    if len(gpr_exp.X_train) <= 20000:
         print("Baseline run...")
         result = full_cached_run(gpr_exp)
     else:

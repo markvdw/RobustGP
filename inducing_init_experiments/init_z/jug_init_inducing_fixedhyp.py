@@ -7,6 +7,7 @@ import tensorflow as tf
 
 import gpflow
 import inducing_init
+from inducing_init.utilities import set_trainable
 from inducing_init_experiments.init_z.utils import print_post_run, uci_train_settings
 from inducing_init_experiments.utils import FullbatchUciExperiment, LoggerCallback
 
@@ -59,8 +60,8 @@ class FullbatchUciInducingOptExperiment(FullbatchUciExperiment):
         print(f"Running {str(self)}")
 
         model = self.model
-        gpflow.utilities.set_trainable(model, False)
-        gpflow.utilities.set_trainable(model.inducing_variable, True)
+        set_trainable(model, False)
+        set_trainable(model.inducing_variable, True)
 
         if self.optimise_objective is None:
             return

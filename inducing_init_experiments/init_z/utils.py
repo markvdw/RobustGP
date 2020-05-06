@@ -1,12 +1,19 @@
+import tensorflow as tf
+
 def print_post_run(run):
     print("")
     try:
+        print(f"ELBO: {run.model.robust_maximum_log_likelihood_objective().numpy()}")
         std_ratio = (run.model.kernel.variance.numpy() / run.model.likelihood.variance.numpy()) ** 0.5
         print(f"(kernel.variance / likelihood.variance)**0.5: {std_ratio}")
         print(run.model.kernel.lengthscales.numpy())
-        print(f"ELBO: {run.model.elbo().numpy()}")
     except AttributeError:
         pass
+    except tf.errors.InvalidArgumentError as e:
+        print("")
+        print("Probably a CholeskyError:")
+        print(e.message)
+        print("Ignoring...")
     print("")
     print("")
 
@@ -18,16 +25,16 @@ uci_train_settings = dict(
     Power=([100, 200, 500, 1000, 2000, 5000], {}),  # Step function in it?
     # Kin8mn=([100, 200, 500, 1000, 2000], {}),  # Can't download
     Parkinsons_noisy=([100, 150, 170, 200, 500], {}),
-    Wilson_parkinsons=([100, 150, 170, 200, 500], {}),
+    Wilson_parkinsons=([100, 150, 170, 200, 500, 1000], {}),
     Wilson_sml=([100, 200, 500, 1000, 2000, 3000, 3500], {}),  # Mostly linear, but with benefit of nonlinear
     # Didn't get SE+Lin working, probably local optimum
     # Wilson_skillcraft=([10, 20, 50, 100, 200, 500], {"kernel_name": "SquaredExponentialLinear"}),
     Wilson_skillcraft=([10, 20, 50, 100, 200, 500, 1000], {}),  # Mostly linear, but with benefit of nonlinear
-    Wilson_gas=([100, 200, 500, 1000, 1300], {}),
+    Wilson_gas=([100, 200, 500, 1000, 1300, 1500], {}),
     Naval=([10, 20, 50, 100, 200], {}),  # Very sparse solution exists
     Naval_noisy=([10, 20, 50, 100, 200, 500], {}),  # Very sparse solution exists
-    Wilson_wine=([100, 200, 500, 1000, 1300], {}),  # Suddenly catches good hypers with large M
-    Wilson_airfoil=([100, 200, 500, 1000, 1250, 1300, 1340], {}),  # Good
+    Wilson_wine=([100, 200, 500, 1000, 1300, 1350], {}),  # Suddenly catches good hypers with large M
+    Wilson_airfoil=([100, 200, 500, 800, 1000, 1250, 1300, 1340], {}),  # Good
     Wilson_solar=([100, 200, 300],
                   {"kernel_name": "SquaredExponentialLinear", "max_lengthscale": 10.0}),  # Mostly linear
     # Good, better performance with Linear kernel added
@@ -41,3 +48,6 @@ uci_train_settings = dict(
     Wilson_stock=([10, 50, 100, 200, 400, 450], {"kernel_name": "SquaredExponentialLinear"}),  # Mostly linear
     Wilson_housing=([100, 200, 300, 400], {})  # Bad
 )
+
+bad_datasets = ["Wilson_housing"]
+good_datasets = [k for k in uci_train_settings.keys() if k not in bad_datasets]
