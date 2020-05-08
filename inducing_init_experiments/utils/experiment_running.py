@@ -72,43 +72,6 @@ def run_tf_optimizer(model, optimizer, data, iterations, callback=None):
 
     return logf
 
-
-def greedy_trace_init(kernel, X, M):
-    """
-    USING Lightly modified CODE FROM:
-    https://papers.nips.cc/paper/7805-fast-greedy-map-inference-for-
-      determinantal-point-process-to-improve-recommendation-diversity.pdf
-    Github source:
-    https://github.com/laming-chen/fast-map-dpp
-    :param kernel: gpflow.kernel
-    :param M: maximum number of inducing points
-    :return: list
-    """
-    print("greedy init")
-    cis = np.zeros((M, X.shape[0]))
-    di2s = kernel.K_diag(X)
-    selected_items = list()
-    selected_item = np.argmax(di2s)
-    selected_items.append(selected_item)
-    while len(selected_items) < M:
-        m = len(selected_items) - 1
-        ci_optimal = cis[:m, selected_item]
-        di_optimal = np.sqrt(di2s[selected_item])
-        new_X = X[selected_item : selected_item + 1, :]
-        elements = kernel.K(new_X, X)[0, :]
-        eis = (elements - np.dot(ci_optimal, cis[:m, :])) / di_optimal
-        cis[m, :] = eis
-        di2s -= np.square(eis)
-        selected_item = np.argmax(di2s)
-        selected_items.append(selected_item)
-        if np.sum(di2s) < 1e-10:  # I added this, break optimization if t<1e-10
-            break
-    if len(selected_items) < M:
-        unselected_items = [i for i in list(range(len(X))) if i not in selected_items]
-        selected_items.extend(unselected_items[: (M - len(selected_items))])
-    return X[selected_items, :]
-
-
 def normalize(X, X_mean, X_std):
     return (X - X_mean) / X_std
 
