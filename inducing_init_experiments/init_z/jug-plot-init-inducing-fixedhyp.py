@@ -9,6 +9,7 @@
 
 import jug.task
 import matplotlib.pyplot as plt
+import numpy as np
 
 from inducing_init_experiments.utils import baselines
 
@@ -23,7 +24,6 @@ from jug_init_inducing_fixedhyp import (
 dataset_plot_settings = dict(
     Naval_noisy=dict(elbo_ylim=(-20e3, 45e3))
 ).get(dataset_name, dict(elbo_ylim=None))
-
 #
 #
 # Evaluation
@@ -32,17 +32,29 @@ init_Z_nlpps = {}
 init_Z_elbos = {}
 init_Z_uppers = {}
 for init_Z_method in init_Z_runs.keys():
-    init_Z_rmses[init_Z_method] = []
-    init_Z_nlpps[init_Z_method] = []
-    init_Z_elbos[init_Z_method] = []
-    init_Z_uppers[init_Z_method] = []
-    for result in init_Z_task_results[init_Z_method]:
-        elbo, upper, rmse, nlpp = jug.task.value(result)
-        init_Z_elbos[str(init_Z_method)].append(elbo)
-        init_Z_uppers[str(init_Z_method)].append(upper)
-        init_Z_rmses[str(init_Z_method)].append(rmse)
-        init_Z_nlpps[str(init_Z_method)].append(nlpp)
-
+    init_Z_rmses[init_Z_method] = dict()
+    init_Z_nlpps[init_Z_method] = dict()
+    init_Z_elbos[init_Z_method] = dict()
+    init_Z_uppers[init_Z_method] = dict()
+    for stat in ["Means", "Standard dev.", "Sample std."]:
+        for dictionary in [init_Z_rmses,init_Z_nlpps,init_Z_elbos, init_Z_uppers]:
+            dictionary[init_Z_method][stat] = []
+    for M in Ms:
+        init_Z_rmses[init_Z_method][str(M)] = []
+        init_Z_nlpps[init_Z_method][str(M)] = []
+        init_Z_elbos[init_Z_method][str(M)] = []
+        init_Z_uppers[init_Z_method][str(M)] = []
+        for result in init_Z_task_results[init_Z_method][str(M)]:
+            elbo, upper, rmse, nlpp = jug.task.value(result)
+            init_Z_elbos[str(init_Z_method)][str(M)].append(elbo)
+            init_Z_uppers[str(init_Z_method)][str(M)].append(upper)
+            init_Z_rmses[str(init_Z_method)][str(M)].append(rmse)
+            init_Z_nlpps[str(init_Z_method)][str(M)].append(nlpp)
+        for dictionary in [init_Z_rmses, init_Z_nlpps, init_Z_elbos, init_Z_uppers]:
+            dictionary[init_Z_method]["Means"].append(np.mean(dictionary[str(init_Z_method)][str(M)]))
+            dictionary[init_Z_method]["Standard dev."].append(np.std(dictionary[str(init_Z_method)][str(M)]))
+            dictionary[init_Z_method]["Sample std."].append(np.std(dictionary[str(init_Z_method)][str(M)])/
+                                                            np.sqrt((len(dictionary[str(init_Z_method)][str(M)])-1)))
 m_elbo, m_rmse, m_nlpp = baselines.meanpred_baseline(None, baseline_exp.Y_train, None, baseline_exp.Y_test)
 l_elbo, l_rmse, l_nlpp = baselines.linear_baseline(baseline_exp.X_train, baseline_exp.Y_train,
                                                    baseline_exp.X_test, baseline_exp.Y_test)
@@ -57,8 +69,8 @@ print(f"nlpp    : {init_Z_nlpps}")
 
 fig, ax = plt.subplots()
 for method in init_Z_runs.keys():
-    l, = ax.plot(Ms, init_Z_elbos[method], label=f"{method} elbo")
-    ax.plot(Ms, init_Z_uppers[method], label=f"{method} upper", color=l.get_color(), linestyle=(0, (3, 1, 1, 1, 1, 1)))
+    l,_,_ = ax.errorbar(Ms, init_Z_elbos[method]["Means"], yerr = init_Z_elbos[method]["Sample std."], label=f"{method} elbo")
+    ax.errorbar(Ms, init_Z_uppers[method]["Means"], yerr = init_Z_elbos[method]["Sample std."], label=f"{method} upper", color=l.get_color(), linestyle=(0, (3, 1, 1, 1, 1, 1)))
 ax.axhline(baseline_lml, label='full GP', linestyle="--")
 ax.axhline(l_elbo, label='linear', linestyle='-.')
 ax.axhline(m_elbo, label='mean', linestyle=':')
@@ -70,7 +82,7 @@ fig.savefig(f"./figures/fixedhyp-{dataset_name}-elbo.png")
 
 fig, ax = plt.subplots()
 for method in init_Z_runs.keys():
-    ax.plot(Ms, init_Z_rmses[method], label=method)
+    ax.errorbar(Ms, init_Z_rmses[method]["Means"], yerr = init_Z_rmses[method]["Sample std."], label=method)
 ax.axhline(full_rmse, label="full GP", linestyle='--')
 ax.axhline(l_rmse, label="linear", linestyle='-.')
 ax.axhline(m_rmse, label="mean", linestyle=':')
@@ -81,7 +93,7 @@ fig.savefig(f"./figures/fixedhyp-{dataset_name}-rmse.png")
 
 fig, ax = plt.subplots()
 for method in init_Z_runs.keys():
-    ax.plot(Ms, init_Z_nlpps[method], label=method)
+    ax.errorbar(Ms, init_Z_nlpps[method]["Means"], yerr=init_Z_nlpps[method]["Sample std."], label=method)
 ax.axhline(full_nlpp, label="full GP", linestyle='--')
 ax.axhline(l_nlpp, label="linear", linestyle='-.')
 ax.axhline(m_nlpp, label="mean", linestyle=':')

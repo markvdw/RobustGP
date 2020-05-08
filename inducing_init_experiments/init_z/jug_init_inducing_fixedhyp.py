@@ -11,25 +11,23 @@ from inducing_init.utilities import set_trainable
 from inducing_init_experiments.init_z.utils import print_post_run, uci_train_settings
 from inducing_init_experiments.utils import FullbatchUciExperiment, LoggerCallback
 
-#
-#
 # Settings
-dataset_name = "Naval_noisy"
+dataset_name = "Wilson_concrete"
 # dataset_name = "Wilson_gas"
-
+num_seeds = 4
+seeds = np.arange(num_seeds)
 
 #
 #
 # Setup
 gpflow.config.set_default_positive_minimum(1.0e-5)
 gpflow.config.set_default_jitter(1e-10)
+init_Z_methods = dict()
+init_Z_methods["Uniform"] = [inducing_init.UniformSubsample(seed=seed) for seed in seeds]
+init_Z_methods["Greedy Conditional Variance"] = [inducing_init.ConditionalVariance(seed=seed) for seed in seeds]
+init_Z_methods["Sample Conditional Variance"] = [inducing_init.ConditionalVariance(sample=True,seed=seed) for seed in seeds]
+init_Z_methods["Kmeans"] = [inducing_init.Kmeans(seed = seed) for seed in seeds]
 
-init_Z_methods = [
-    inducing_init.FirstSubsample(),
-    inducing_init.ConditionalVariance(),
-    inducing_init.ConditionalVariance(sample=True),
-    inducing_init.Kmeans(),
-]
 experiment_name = "init-inducing"
 
 experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
@@ -144,17 +142,21 @@ def run_sparse_init(exp):
     elbo, upper, rmse, nlpp = compute_model_stats(exp)
     return elbo, upper, rmse, nlpp
 
-
-for init_Z_method in init_Z_methods:
-    settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": init_Z_method, **dataset_custom_settings}
-                         for M in Ms]
-    init_Z_runs[str(init_Z_method)] = []
-    init_Z_task_results[str(init_Z_method)] = []
+for name, init_Z_method in init_Z_methods.items():
+    print(init_Z_method)
+    init_Z_runs[name] = dict()
+    init_Z_task_results[name] = dict()
+    for M in Ms:
+        init_Z_runs[name][str(M)] = []
+        init_Z_task_results[name][str(M)] = []
+    settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": seeded_init_Z_method, **dataset_custom_settings}
+                          for M in Ms for seeded_init_Z_method in init_Z_method]
     for run_settings in settings_for_runs:
+        M = str(run_settings["M"])
         exp = FullbatchUciExperiment(**{**common_run_settings, **run_settings}, initial_parameters=model_parameters)
         result = run_sparse_init(exp)
-        init_Z_runs[str(init_Z_method)].append(exp)
-        init_Z_task_results[str(init_Z_method)].append(result)
+        init_Z_runs[name][M].append(exp)
+        init_Z_task_results[name][M].append(result)
 
 
 # Bound optimisation
@@ -167,12 +169,16 @@ def run_sparse_opt(exp):
     return elbo, upper, rmse, nlpp
 
 
-settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": inducing_init.ConditionalVariance(sample=True),
+settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": inducing_init.ConditionalVariance(sample=True, seed=seed),
                       **dataset_custom_settings}
-                     for M in Ms]
-init_Z_runs["gradient"] = []
-init_Z_task_results["gradient"] = []
-upper_runs = []
+                     for M in Ms for seed in seeds]
+init_Z_runs["gradient"] = dict()
+init_Z_task_results["gradient"] = dict()
+upper_runs = dict()
+for M in Ms:
+    init_Z_runs["gradient"][str(M)] = []
+    init_Z_task_results["gradient"][str(M)] = []
+    upper_runs[str(M)] = []
 # for optimise_objective in ["upper", "lower"]:  # Optimising the upper bound makes hardly any difference
 for optimise_objective in ["lower"]:
     for run_settings in settings_for_runs:
@@ -180,9 +186,9 @@ for optimise_objective in ["lower"]:
                                                 initial_parameters=model_parameters,
                                                 optimise_objective=optimise_objective)
         result = run_sparse_opt(exp)
-
         if optimise_objective == "lower":
-            init_Z_runs["gradient"].append(exp)
-            init_Z_task_results["gradient"].append(result)
+            M = str(run_settings["M"])
+            init_Z_runs["gradient"][M].append(exp)
+            init_Z_task_results["gradient"][M].append(result)
         elif optimise_objective == "upper":
-            upper_runs.append(exp)
+            upper_runs[M].append(exp)
