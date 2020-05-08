@@ -27,6 +27,7 @@ init_Z_methods["Uniform"] = [inducing_init.UniformSubsample(seed=seed) for seed 
 init_Z_methods["Greedy Conditional Variance"] = [inducing_init.ConditionalVariance(seed=seed) for seed in seeds]
 init_Z_methods["Sample Conditional Variance"] = [inducing_init.ConditionalVariance(sample=True,seed=seed) for seed in seeds]
 init_Z_methods["Kmeans"] = [inducing_init.Kmeans(seed = seed) for seed in seeds]
+init_Z_methods["M-DPP MCMC"] = [inducing_init.KdppMCMC(seed=seed) for seed in seeds]
 
 experiment_name = "init-inducing"
 
@@ -143,7 +144,6 @@ def run_sparse_init(exp):
     return elbo, upper, rmse, nlpp
 
 for name, init_Z_method in init_Z_methods.items():
-    print(init_Z_method)
     init_Z_runs[name] = dict()
     init_Z_task_results[name] = dict()
     for M in Ms:

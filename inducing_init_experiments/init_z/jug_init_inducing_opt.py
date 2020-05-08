@@ -25,8 +25,8 @@ from inducing_init_experiments.utils import baselines, FullbatchUciExperiment
 #
 #
 # Settings
-# dataset_name = "Naval_noisy"
-dataset_name = "Wilson_concrete"
+dataset_name = "Naval_noisy"
+#dataset_name = "Wilson_concrete"
 # init_from_baseline = True
 init_from_baseline = False
 
@@ -36,15 +36,19 @@ init_from_baseline = False
 gpflow.config.set_default_positive_minimum(1.0e-5)
 gpflow.config.set_default_jitter(1e-10)
 
-init_Z_methods = [
-    inducing_init.FirstSubsample(),
-    inducing_init.ConditionalVariance(),
-    inducing_init.ConditionalVariance(sample=True),
-    inducing_init.Kmeans(),
-]
+num_seeds = 4
+seeds = np.arange(num_seeds)
+
+init_Z_methods = dict()
+init_Z_methods["Uniform"] = [inducing_init.UniformSubsample(seed=seed) for seed in seeds]
+init_Z_methods["Greedy Conditional Variance"] = [inducing_init.ConditionalVariance(seed=seed) for seed in seeds]
+init_Z_methods["Sample Conditional Variance"] = [inducing_init.ConditionalVariance(sample=True,seed=seed) for seed in seeds]
+init_Z_methods["Kmeans"] = [inducing_init.Kmeans(seed = seed) for seed in seeds]
+init_Z_methods["M-DPP MCMC"] = [inducing_init.KdppMCMC(seed=seed) for seed in seeds]
+
 experiment_name = "init-inducing"
 
-init_Z_before_hypers = init_from_baseline  # Only if you init from baseline do you need to init Z before hypers
+init_Z_before_hypers = False  # Only if you init from baseline do you need to init Z before hypers
 
 # %%
 experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
@@ -142,18 +146,22 @@ def run_sparse_opt(exp):
 # Sparse runs
 init_Z_runs = {}
 init_Z_task_results = {}
-for init_Z_method in init_Z_methods:
-    settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": init_Z_method,
+for name, init_Z_method in init_Z_methods.items():
+    settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": seeded_init_Z_method,
                           "base_filename": "opthyp-fixed_Z", "initial_parameters": model_parameters,
                           "init_Z_before_params": init_Z_before_hypers, **dataset_custom_settings}
-                         for M in Ms]
-    init_Z_runs[str(init_Z_method)] = []
-    init_Z_task_results[str(init_Z_method)] = []
+                         for M in Ms for seeded_init_Z_method in init_Z_method]
+    init_Z_runs[name] = dict()
+    init_Z_task_results[name] = dict()
+    for M in Ms:
+        init_Z_runs[name][str(M)] = []
+        init_Z_task_results[name][str(M)] = []
     for run_settings in settings_for_runs:
+        M = str(run_settings["M"])
         exp = InitZBeforeHypers(**{**common_run_settings, **run_settings})
         result = run_sparse_opt(exp)
-        init_Z_runs[str(init_Z_method)].append(exp)
-        init_Z_task_results[str(init_Z_method)].append(result)
+        init_Z_runs[name][M].append(exp)
+        init_Z_task_results[name][M].append(result)
 
 
 #
@@ -164,15 +172,21 @@ settings_for_runs = [{"model_class": "SGPR", "M": M,
                       "initial_parameters": model_parameters,
                       "init_Z_before_params": init_Z_before_hypers, **dataset_custom_settings}
                      for M in Ms]
-for name, init_Z_method in zip(
-        ["reinit_Z_sF", "reinit_Z_sT"],
-        [inducing_init.ConditionalVariance(sample=False), inducing_init.ConditionalVariance(sample=True)]
-):
-    init_Z_runs[name] = []
-    init_Z_task_results[name] = []
-    for run_settings in settings_for_runs:
-        exp = InitZBeforeHypers(**{**common_run_settings, **run_settings, "init_Z_method": init_Z_method})
-        result = run_sparse_opt(exp)
-        init_Z_runs[name].append(exp)
-        init_Z_task_results[name].append(result)
+names = ["reinit_Z_sF", "reinit_Z_sT"]
+for name in names:
+    init_Z_runs[name] = dict()
+    init_Z_task_results[name] = dict()
+    for M in Ms:
+        init_Z_runs[name][str(M)] = []
+        init_Z_task_results[name][str(M)] = []
+for seed in seeds:
+    for name, init_Z_method in zip(
+            ["reinit_Z_sF", "reinit_Z_sT"], [inducing_init.ConditionalVariance(seed=seed,sample=False),
+                                             inducing_init.ConditionalVariance(seed=seed,sample=True)]):
+        for run_settings in settings_for_runs:
+            exp = InitZBeforeHypers(**{**common_run_settings, **run_settings, "init_Z_method": init_Z_method})
+            result = run_sparse_opt(exp)
+            M = str(run_settings["M"])
+            init_Z_runs[name][M].append(exp)
+            init_Z_task_results[name][M].append(result)
 
