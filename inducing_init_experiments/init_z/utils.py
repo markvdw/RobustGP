@@ -1,5 +1,6 @@
 import tensorflow as tf
 
+
 def print_post_run(run):
     print("")
     try:
@@ -19,6 +20,9 @@ def print_post_run(run):
 
 
 uci_train_settings = dict(
+    Wilson_tamielectric=([100, 200, 500, 1000, 2000], {}),
+    Wilson_protein=([100, 200, 500, 1000, 2000], {}),
+    Wilson_kin40k=([(1000, 2000, 5000, 10000, 15000), {}]),
     Wilson_bike=([100, 200, 500, 1000, 2000, 5000], {}),
     Wilson_elevators=([100, 200, 500, 1000, 2000, 5000], {}),
     Wilson_pol=([100, 200, 500, 1000, 2000, 5000], {}),
@@ -49,5 +53,5 @@ uci_train_settings = dict(
     Wilson_housing=([100, 200, 300, 400], {})  # Bad
 )
 
-bad_datasets = ["Wilson_housing"]
+bad_datasets = ["Wilson_housing", "Wilson_forest"]
 good_datasets = [k for k in uci_train_settings.keys() if k not in bad_datasets]

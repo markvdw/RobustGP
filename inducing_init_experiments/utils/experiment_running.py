@@ -51,62 +51,26 @@ class LoggerCallback:
         self.counter += 1
 
 
-def run_tf_optimizer(model, optimizer, data, iterations, callback=None):
-    logf = []
-
-    @tf.function(autograph=False)
-    def optimization_step():
-        with tf.GradientTape(watch_accessed_variables=False) as tape:
-            tape.watch(model.trainable_variables)
-            objective = model.elbo(*data)
-            grads = tape.gradient(objective, model.trainable_variables)
-        optimizer.apply_gradients(zip(grads, model.trainable_variables))
-        return -objective
-
-    for step in range(iterations):
-        elbo = optimization_step()
-        print(f"{step}\t{elbo:.4f}", end="\r")
-        if callback is not None:
-            callback(step)
-    print("")
-
-    return logf
-
-
-def greedy_trace_init(kernel, X, M):
-    """
-    USING Lightly modified CODE FROM:
-    https://papers.nips.cc/paper/7805-fast-greedy-map-inference-for-
-      determinantal-point-process-to-improve-recommendation-diversity.pdf
-    Github source:
-    https://github.com/laming-chen/fast-map-dpp
-    :param kernel: gpflow.kernel
-    :param M: maximum number of inducing points
-    :return: list
-    """
-    print("greedy init")
-    cis = np.zeros((M, X.shape[0]))
-    di2s = kernel.K_diag(X)
-    selected_items = list()
-    selected_item = np.argmax(di2s)
-    selected_items.append(selected_item)
-    while len(selected_items) < M:
-        m = len(selected_items) - 1
-        ci_optimal = cis[:m, selected_item]
-        di_optimal = np.sqrt(di2s[selected_item])
-        new_X = X[selected_item : selected_item + 1, :]
-        elements = kernel.K(new_X, X)[0, :]
-        eis = (elements - np.dot(ci_optimal, cis[:m, :])) / di_optimal
-        cis[m, :] = eis
-        di2s -= np.square(eis)
-        selected_item = np.argmax(di2s)
-        selected_items.append(selected_item)
-        if np.sum(di2s) < 1e-10:  # I added this, break optimization if t<1e-10
-            break
-    if len(selected_items) < M:
-        unselected_items = [i for i in list(range(len(X))) if i not in selected_items]
-        selected_items.extend(unselected_items[: (M - len(selected_items))])
-    return X[selected_items, :]
+# def run_tf_optimizer(model, optimizer, data, iterations, callback=None):
+#     logf = []
+#
+#     @tf.function(autograph=False)
+#     def optimization_step():
+#         with tf.GradientTape(watch_accessed_variables=False) as tape:
+#             tape.watch(model.trainable_variables)
+#             objective = model.elbo(*data)
+#             grads = tape.gradient(objective, model.trainable_variables)
+#         optimizer.apply_gradients(zip(grads, model.trainable_variables))
+#         return -objective
+#
+#     for step in range(iterations):
+#         elbo = optimization_step()
+#         print(f"{step}\t{elbo:.4f}", end="\r")
+#         if callback is not None:
+#             callback(step)
+#     print("")
+#
+#     return logf
 
 
 def normalize(X, X_mean, X_std):
@@ -283,12 +247,9 @@ class GaussianProcessUciExperiment(UciExperiment):
     init_Z_method: Optional[InducingPointInitializer] = FirstSubsample()
     max_lengthscale: Optional[float] = 1000.0
 
-    training_procedure: Optional[str] = "joint"  # joint | reinit
-
     initial_parameters: Optional[dict] = field(default_factory=dict)
 
     # Populated during object life
-    optimisation_steps = 0
     train_objective_hist = None
 
     def setup_model(self):
@@ -310,10 +271,14 @@ class GaussianProcessUciExperiment(UciExperiment):
             kernel = gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1]))
         elif self.kernel_name == "SquaredExponentialLinear":
             kernel = (
-                gpflow.kernels.SquaredExponential(lengthscales=np.ones(self.X_train.shape[1])) + gpflow.kernels.Linear()
+                    gpflow.kernels.SquaredExponential(
+                        lengthscales=np.ones(self.X_train.shape[1])) + gpflow.kernels.Linear()
             )
         else:
-            raise NotImplementedError
+            try:
+                kernel = getattr(gpflow.kernels, self.kernel_name)(lengthscales=np.ones(self.X_train.shape[1]))
+            except:
+                raise NotImplementedError
 
         return kernel
 
@@ -323,15 +288,6 @@ class GaussianProcessUciExperiment(UciExperiment):
     def init_inducing_variable(self):
         if self.M > len(self.X_train):
             raise ValueError("Cannot have M > len(X).")
-
-        # if self.init_Z_method == "first":
-        #     Z = self.X_train[:self.M, :].copy()
-        # elif self.init_Z_method == "uniform":
-        #     Z = self.X_train[np.random.permutation(len(self.X_train))[:self.M], :].copy()
-        # elif self.init_Z_method == "greedy-trace":
-        #     Z = greedy_trace_init(self.model.kernel, self.X_train, self.M)
-        # else:
-        #     raise NotImplementedError
 
         Z, _ = self.init_Z_method(self.X_train, self.M, self.model.kernel)
 
@@ -343,9 +299,7 @@ class GaussianProcessUciExperiment(UciExperiment):
             self.model.inducing_variable.Z = gpflow.Parameter(Z)
 
     def init_params(self):
-        # if self.model_class == "GPR":
-        #     self.model.likelihood.variance = gpflow.Parameter(1.0, transform=gpflow.utilities.positive(1e-4))
-        self.model.likelihood.variance.assign(0.01)
+        self.model.likelihood.variance = gpflow.Parameter(0.01, transform=gpflow.utilities.positive(1e-5))
         gpflow.utilities.multiple_assign(self.model, self.initial_parameters)
 
         constrained_transform = tfp.bijectors.Sigmoid(
@@ -357,7 +311,8 @@ class GaussianProcessUciExperiment(UciExperiment):
             new_len = gpflow.Parameter(self.model.kernel.lengthscales.numpy(), transform=constrained_transform)
             self.model.kernel.lengthscales = new_len
         elif self.kernel_name == "SquaredExponentialLinear":
-            new_len = gpflow.Parameter(self.model.kernel.kernels[0].lengthscales.numpy(), transform=constrained_transform)
+            new_len = gpflow.Parameter(self.model.kernel.kernels[0].lengthscales.numpy(),
+                                       transform=constrained_transform)
             self.model.kernel.kernels[0].lengthscales = new_len
 
         # TODO: Check if "inducing_variable" is in one of the keys in `self.initial_parameters`, to make things work
@@ -371,6 +326,7 @@ class GaussianProcessUciExperiment(UciExperiment):
 @dataclass
 class FullbatchUciExperiment(GaussianProcessUciExperiment):
     optimizer: Optional[str] = "l-bfgs-b"
+    training_procedure: Optional[str] = "joint"  # joint | reinit
 
     def run_optimisation(self):
         print(f"Running {str(self)}")

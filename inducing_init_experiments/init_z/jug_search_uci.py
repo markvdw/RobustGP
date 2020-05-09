@@ -21,7 +21,7 @@ experiment_name = "search-uci"
 dataset_names = ["Wilson_stock", "Wilson_energy", "Pendulum_noisy", "Wilson_pendulum", "Wilson_concrete",
                  "Wilson_airfoil", "Wilson_wine", "Naval_noisy", "Naval", "Wilson_gas", "Wilson_skillcraft",
                  "Wilson_sml", "Wilson_parkinsons", "Parkinsons_noisy", "Power", "Wilson_pol", "Wilson_elevators",
-                 "Wilson_bike"]
+                 "Wilson_bike", "Wilson_kin40k", "Wilson_protein", "Wilson_tamielectric"]
 # dataset_names = good_datasets
 
 Z_init_method = inducing_init.ConditionalVariance(sample=True)
@@ -66,7 +66,7 @@ for dataset_name in dataset_names:
     gpr_exp = FullbatchUciExperiment(**{**common_run_settings, **dataset_custom_settings, "model_class": "GPR",
                                         "training_procedure": "joint"})
     gpr_exp.load_data()
-    if len(gpr_exp.X_train) <= 20000:
+    if len(gpr_exp.X_train) <= 30000:
         print("Baseline run...")
         result = full_cached_run(gpr_exp)
     else:

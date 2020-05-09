@@ -9,7 +9,7 @@ from observations.util import maybe_download_and_extract
 from bayesian_benchmarks.data import *
 
 
-def snelson1d(path):
+def snelson1d(path="./.data/"):
     """Load Edward Snelson's 1d regression data set [@snelson2006fitc].
     It contains 200 examples of a few oscillations of an example function. It has
     seen extensive use as a toy dataset for illustrating qualitative behaviour of
@@ -44,7 +44,7 @@ def snelson1d(path):
     X = np.loadtxt(os.path.join(inputs_path))[:, None]
     Y = np.loadtxt(os.path.join(outputs_path))[:, None]
 
-    return X, Y
+    return (X, Y), (X, Y)
 
 
 class Naval_noisy(Naval):
