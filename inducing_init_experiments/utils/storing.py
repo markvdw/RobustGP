@@ -8,7 +8,10 @@ def get_next_filename(path, base_filename="data", extension="pkl"):
     if not os.path.exists(path):
         os.makedirs(path)
     largest_existing_number = max([int(re.findall(r'\d+', fn)[-1]) for fn in glob(f"{path}/{base_filename}*")] + [0])
-    return f"{path}/{base_filename}{largest_existing_number + 1}.{extension}"
+    path = f"{path}/{base_filename}{largest_existing_number + 1}"
+    if extension is not None:
+        path = f"{path}.{extension}"
+    return path
 
 
 def store_pickle(data, base_path, base_filename="data"):
