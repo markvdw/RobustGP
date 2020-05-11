@@ -150,7 +150,7 @@ class ConditionalVariance(InducingPointInitializer):
         training_inputs = training_inputs[perm]
         # note this will throw an out of bounds exception if we do not update each entry
         indices = np.zeros(M, dtype=int) + N
-        di = kernel(training_inputs, None, full_cov=False)
+        di = kernel(training_inputs, None, full_cov=False) + 1e-12  # jitter
         if self.sample:
             indices[0] = sample_discrete(di)
         else:
@@ -166,10 +166,12 @@ class ConditionalVariance(InducingPointInitializer):
             new_Z = training_inputs[j:j + 1]  # [1,D]
             dj = np.sqrt(di[j])  # float
             cj = ci[:m, j]  # [m, 1]
-            L = np.squeeze(kernel(training_inputs, new_Z, full_cov=True))  # [N]
+            L = np.squeeze(kernel(training_inputs, new_Z, full_cov=True).numpy())  # [N]
+            L[j] += 1e-12 # jitter
             ei = (L - np.dot(cj, ci[:m])) / dj
             ci[m, :] = ei
             di -= ei ** 2
+            di = np.clip(di, 0, None)
             if self.sample:
                 indices[m + 1] = sample_discrete(di)
             else:

@@ -15,7 +15,7 @@ from inducing_init_experiments.utils import FullbatchUciExperiment, LoggerCallba
 dataset_names = ["Wilson_energy", "Naval_noisy", "Wilson_elevators"]
 num_seeds = 10
 seeds = np.arange(num_seeds)
-model_parameters = {}
+all_model_parameters = {}
 #
 #
 # Setup
@@ -39,7 +39,7 @@ uci_train_settings.update(dict(
 def get_settings(dataset_name):
     experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
     Ms, dataset_custom_settings = uci_train_settings[dataset_name]
-    common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1000.0)
+    common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0)
     return experiment_storage_path, Ms, common_run_settings, dataset_custom_settings
 
 #
@@ -120,7 +120,7 @@ for dataset_name in dataset_names:
     ).get(dataset_name, dict(model_class="GPR", max_lengthscale=1000.0))
     experiment_storage_path, _ , common_run_settings, dataset_custom_settings = get_settings(dataset_name)
     baseline_exps[dataset_name] = FullbatchUciExperiment(**{**common_run_settings, **dataset_custom_settings, **baseline_custom_settings})
-    model_parameters[dataset_name], full_rmses[dataset_name], full_nlpps[dataset_name], baseline_lmls[dataset_name] \
+    all_model_parameters[dataset_name], full_rmses[dataset_name], full_nlpps[dataset_name], baseline_lmls[dataset_name] \
         = jug.bvalue(run_baseline(baseline_exps[dataset_name]))
 
 
@@ -152,7 +152,7 @@ for dataset_name in dataset_names:
         for run_settings in settings_for_runs:
             M = str(run_settings["M"])
             exp = FullbatchUciExperiment(**{**common_run_settings, **run_settings},
-                                         initial_parameters=model_parameters[dataset_name])
+                                         initial_parameters=all_model_parameters[dataset_name])
             result = run_sparse_init(exp)
             init_Z_runs[dataset_name][method_name][M].append(exp)
             init_Z_task_results[dataset_name][method_name][M].append(result)
@@ -183,7 +183,7 @@ for dataset_name in dataset_names:
     for optimise_objective in ["lower"]:
         for run_settings in settings_for_runs:
             exp = FullbatchUciInducingOptExperiment(**{**common_run_settings, **run_settings},
-                                                    initial_parameters=model_parameters[dataset_name],
+                                                    initial_parameters=all_model_parameters[dataset_name],
                                                     optimise_objective=optimise_objective)
             M = str(run_settings["M"])
             result = run_sparse_opt(exp)

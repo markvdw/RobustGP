@@ -245,6 +245,7 @@ class GaussianProcessUciExperiment(UciExperiment):
     kernel_name: Optional[str] = "SquaredExponential"
     init_Z_method: Optional[InducingPointInitializer] = FirstSubsample()
     max_lengthscale: Optional[float] = 1000.0
+    max_variance: Optional[float] = 1000.0
 
     training_procedure: Optional[str] = "joint"  # joint | reinit
 
@@ -316,12 +317,23 @@ class GaussianProcessUciExperiment(UciExperiment):
             gpflow.utilities.to_default_float(self.max_lengthscale),
         )
 
+        var_constrained_transform = tfp.bijectors.Sigmoid(
+            gpflow.utilities.to_default_float(gpflow.config.default_positive_minimum()),
+            gpflow.utilities.to_default_float(self.max_variance),
+        )
+
         if self.kernel_name == "SquaredExponential":
             new_len = gpflow.Parameter(self.model.kernel.lengthscales.numpy(), transform=constrained_transform)
+            new_var = gpflow.Parameter(self.model.kernel.variance.numpy(), transform = var_constrained_transform)
             self.model.kernel.lengthscales = new_len
+            self.model.kernel.variance = new_var
         elif self.kernel_name == "SquaredExponentialLinear":
             new_len = gpflow.Parameter(self.model.kernel.kernels[0].lengthscales.numpy(), transform=constrained_transform)
             self.model.kernel.kernels[0].lengthscales = new_len
+            new_var_se = gpflow.Parameter(self.model.kernel[0].variance.numpy(), transform=var_constrained_transform)
+            new_var_lin = gpflow.Parameter(self.model.kernel[1].variance.numpy(), transform=var_constrained_transform)
+            self.model.kernel[0].variance = new_var_se
+            self.model.kernel[1].variance = new_var_lin
 
         # TODO: Check if "inducing_variable" is in one of the keys in `self.initial_parameters`, to make things work
         #       with non `InducingPoints` like inducing variables.
