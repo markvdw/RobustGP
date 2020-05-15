@@ -40,6 +40,11 @@ class RobustObjectiveMixin:
                 if (("Cholesky" not in e_msg) and ("not invertible" not in e_msg)) or i == (N_orders - 1):
                     print(e_msg)
                     raise e_inner
+            except AssertionError as e_inner:
+                e_msg = e_inner.message
+                if i == (N_orders - 1):
+                    print(e_msg)
+                    raise e_inner
         if restore_jitter:
             self.jitter_variance.assign(initial_jitter)
         if i > 0:
@@ -74,6 +79,9 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
         LB = tf.linalg.cholesky(B)
         Aerr = tf.linalg.matmul(A, err)
         c = tf.linalg.triangular_solve(LB, Aerr, lower=True) / sigma
+        trace_term = 0.5 * output_dim * tf.reduce_sum(Kdiag) / self.likelihood.variance
+        trace_term -= 0.5 * output_dim * tf.reduce_sum(tf.linalg.diag_part(AAT))
+        assert trace_term > 0. # tr(Kff - Qff) should be positive, numerical issues can arise here
 
         # compute log marginal bound
         bound = -0.5 * num_data * output_dim * np.log(2 * np.pi)
@@ -81,8 +89,8 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
         bound -= 0.5 * num_data * output_dim * tf.math.log(self.likelihood.variance)
         bound += -0.5 * tf.reduce_sum(tf.square(err)) / self.likelihood.variance
         bound += 0.5 * tf.reduce_sum(tf.square(c))
-        bound += -0.5 * output_dim * tf.reduce_sum(Kdiag) / self.likelihood.variance
-        bound += 0.5 * output_dim * tf.reduce_sum(tf.linalg.diag_part(AAT))
+        bound -= trace_term
+
 
         return bound
 
