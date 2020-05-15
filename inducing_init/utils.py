@@ -1,3 +1,5 @@
+from typing import Callable, Optional
+
 import numpy as np
 import scipy.linalg
 import warnings
@@ -60,10 +62,7 @@ def _get_log_det_ratio(X, kernel, indices, s, t, Q, R):
     :param R: upper triangular matrix, QR = Kuu (for Z=X[indices])
     :return: log determinant ratio , Qnew, Rnew. QR decomposition of Z-{s}+{t}.
     """
-    try:
-        log_denominator = np.sum(np.log(np.abs(np.diag(R))))  # current value of det(Kuu)
-    except:
-        import pdb; pdb.set_trace()
+    log_denominator = np.sum(np.log(np.abs(np.diag(R))))  # current value of det(Kuu)
     # remove s from the QR decomposition
     Qtemp, Rtemp = _delete_qr_square(Q, R, s)
     # build new row and column to add to QR decomposition
@@ -98,4 +97,69 @@ def accept_or_reject(X, kernel, indices, s, t, Q, R):
     if np.random.rand() < acceptance_prob:
         return True, Qnew, Rnew  # swapped
     return False, Q, R  # stayed in same state
+
+
+def approximate_rls(training_inputs, kernel, regularization, subset_to_predict, subset_used, column_weights):
+    X = training_inputs[subset_to_predict]
+    Z = training_inputs[subset_used]
+    regularization_matrix = np.diag(np.square(1. / column_weights) * regularization)
+    regularized_Kuu = kernel(Z) + regularization_matrix
+    L = np.linalg.cholesky(regularized_Kuu)
+    kuf = kernel(Z, X)
+    Linvkuf = scipy.linalg.solve_triangular(L, kuf, lower=True)
+    posterior_variance = kernel(X, full_cov=False) - np.sum(np.square(Linvkuf), axis=0)
+
+    return 1 / regularization * posterior_variance
+
+
+def get_indices_and_weights(weighted_leverage, active_indices, k, top_level, M):
+    probs = np.minimum(1., weighted_leverage * np.log(2*k))
+    if not top_level:
+        random_nums = np.random.rand(len(probs))
+        indices_to_include = active_indices[random_nums < probs]
+        column_weights = np.sqrt(1. / probs[random_nums < probs])
+    else:
+        probs = probs * M / np.sum(probs)
+        random_nums = np.random.rand(len(probs))
+        indices_to_include = active_indices[random_nums < probs]
+        column_weights = np.sqrt(1. / probs[random_nums < probs])
+        # If we sample too few inducing points, resample
+        while len(indices_to_include) < M:
+            print("Resampling, Sampled:", len(indices_to_include), "Target M:", M)
+            random_nums = np.random.rand(len(probs))  # resample if not enough
+            indices_to_include = active_indices[random_nums < probs]
+            column_weights = np.sqrt(1. / probs[random_nums < probs])
+            probs = np.clip(probs * M / np.sum(np.clip(probs, 0, 1)), 0, 1)
+            probs *= 1.01
+        inds = np.random.choice(len(indices_to_include), size=M, replace=False)
+        indices_to_include, column_weights = indices_to_include[inds], column_weights[inds]
+    return indices_to_include, column_weights, probs
+
+def recursive_rls(training_inputs: np.ndarray,
+                  M: int,
+                  kernel: Callable[[np.ndarray, Optional[np.ndarray], Optional[bool]], np.ndarray],
+                  active_indices: np.ndarray):
+    num_data = training_inputs.shape[0]
+    top_level = len(active_indices) == num_data   # boolean indicating we are at top level of recursion
+    c = .25
+    k = np.minimum(num_data, int(np.ceil(c * M / np.log(M))))
+
+
+    if len(active_indices) <= M:  # Base case of recursion, see l 1,2 in Musco and Musco, alg 3
+        return active_indices, np.ones_like(active_indices), np.ones_like(active_indices)
+    s_bar = np.random.randint(0, 2, len(active_indices)).nonzero()[0]  # points sampled into Sbar, l4
+    indices_to_include, column_weights, probs = recursive_rls(training_inputs, M, kernel,
+                                                              active_indices=active_indices[s_bar])
+    Z = training_inputs[indices_to_include]
+    SKS = kernel(Z) * column_weights[None, :] * column_weights[:, None]  # sketched kernel matrix
+    eigvals = scipy.sparse.linalg.eigsh(SKS.numpy(), k=k, which='LM', return_eigenvectors=False)
+    lam = 1 / k * (np.sum(np.diag(SKS)) - np.sum(eigvals))
+    lam = np.maximum(1e-12, lam)
+
+    weighted_leverage = approximate_rls(training_inputs, kernel, lam, subset_to_predict=active_indices,
+                                        subset_used=indices_to_include, column_weights=column_weights)
+    indices_to_include, column_weights, probs = get_indices_and_weights(weighted_leverage, active_indices, k,
+                                                                        top_level, M)
+
+    return indices_to_include, column_weights, probs
 

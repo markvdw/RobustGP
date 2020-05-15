@@ -4,7 +4,7 @@ from typing import Callable, Optional
 import numpy as np
 import scipy.cluster
 
-from .utils import sample_discrete, accept_or_reject
+from .utils import sample_discrete, accept_or_reject, get_indices_and_weights, approximate_rls, recursive_rls
 
 
 class InducingPointInitializer:
@@ -170,7 +170,10 @@ class ConditionalVariance(InducingPointInitializer):
             L[j] += 1e-12 # jitter
             ei = (L - np.dot(cj, ci[:m])) / dj
             ci[m, :] = ei
-            di -= ei ** 2
+            try:
+                di -= ei ** 2
+            except FloatingPointError:
+                pass
             di = np.clip(di, 0, None)
             if self.sample:
                 indices[m + 1] = sample_discrete(di)
@@ -252,4 +255,22 @@ class KdppMCMC(ConditionalVariance):
                 indices = np.delete(indices, s, axis=0)
                 indices = np.append(indices, [t], axis=0)
         return training_inputs[indices], indices
+
+
+class RLS(InducingPointInitializer):
+    """
+    TODO: Add relevant references, probably Alaoui and Mahoney, Musco and Musco and Calandriello et al.
+    """
+
+    def __init__(self, seed: Optional[int] = 0, **kwargs):
+        super().__init__(seed=seed, randomized=True, **kwargs)
+
+
+    def compute_initialisation(self, training_inputs: np.ndarray, M: int,
+                               kernel: Callable[[np.ndarray, Optional[np.ndarray], Optional[bool]], np.ndarray]):
+        indices, _, _ = recursive_rls(training_inputs, M, kernel, np.arange(training_inputs.shape[0]))
+        return training_inputs[indices], indices
+
+
+
 
