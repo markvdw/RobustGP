@@ -27,6 +27,7 @@ init_Z_methods["Greedy Conditional Variance"] = [inducing_init.ConditionalVarian
 init_Z_methods["Sample Conditional Variance"] = [inducing_init.ConditionalVariance(sample=True,seed=seed) for seed in seeds]
 init_Z_methods["Kmeans"] = [inducing_init.Kmeans(seed = seed) for seed in seeds]
 init_Z_methods["M-DPP MCMC"] = [inducing_init.KdppMCMC(seed=seed) for seed in seeds]
+init_Z_methods["RLS"] = [inducing_init.RLS(seed=seed) for seed in seeds]
 
 experiment_name = "init-inducing"
 
@@ -39,7 +40,7 @@ uci_train_settings.update(dict(
 def get_settings(dataset_name):
     experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
     Ms, dataset_custom_settings = uci_train_settings[dataset_name]
-    common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0)
+    common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0,max_variance=1001.0)
     return experiment_storage_path, Ms, common_run_settings, dataset_custom_settings
 
 #
@@ -116,8 +117,8 @@ baseline_lmls = {}
 for dataset_name in dataset_names:
     baseline_custom_settings = dict(
         Naval_noisy={"model_class": "SGPR", "M": 1000, "training_procedure": "reinit_Z",
-                     "init_Z_method": inducing_init.ConditionalVariance(sample=False), "max_lengthscale": 1000.0}
-    ).get(dataset_name, dict(model_class="GPR", max_lengthscale=1000.0))
+                     "init_Z_method": inducing_init.ConditionalVariance(sample=False), "max_lengthscale": 1000.0, "max_variance":1000.0}
+    ).get(dataset_name, dict(model_class="GPR", max_lengthscale=1000.0, max_variance=1000.0))
     experiment_storage_path, _ , common_run_settings, dataset_custom_settings = get_settings(dataset_name)
     baseline_exps[dataset_name] = FullbatchUciExperiment(**{**common_run_settings, **dataset_custom_settings, **baseline_custom_settings})
     all_model_parameters[dataset_name], full_rmses[dataset_name], full_nlpps[dataset_name], baseline_lmls[dataset_name] \
