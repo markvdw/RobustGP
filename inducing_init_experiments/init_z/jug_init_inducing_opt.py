@@ -25,7 +25,7 @@ from inducing_init_experiments.utils import baselines, FullbatchUciExperiment
 #
 #
 # Settings
-dataset_names = ["Wilson_energy", "Noisy_naval", "Wilson_elevators"]
+dataset_names = ["Wilson_energy", "Naval_noisy", "Wilson_elevators"]
 # init_from_baseline = True
 init_from_baseline = False
 
@@ -48,6 +48,7 @@ init_Z_methods["Greedy Conditional Variance"] = [inducing_init.ConditionalVarian
 init_Z_methods["Sample Conditional Variance"] = [inducing_init.ConditionalVariance(sample=True,seed=seed) for seed in seeds]
 init_Z_methods["Kmeans"] = [inducing_init.Kmeans(seed = seed) for seed in seeds]
 init_Z_methods["M-DPP MCMC"] = [inducing_init.KdppMCMC(seed=seed) for seed in seeds]
+init_Z_methods["RLS"] = [inducing_init.RLS(seed=seed) for seed in seeds]
 
 experiment_name = "init-inducing"
 
@@ -98,10 +99,10 @@ class InitZBeforeHypers(FullbatchUciExperiment):
             gpflow.utilities.multiple_assign(self.model, self.initial_parameters)
 
 def compute_model_stats(exp):
+    elbo = exp.model.robust_maximum_log_likelihood_objective(restore_jitter=False).numpy()
+    upper = exp.model.upper_bound().numpy()
     rmse = np.mean((exp.model.predict_f(exp.X_test)[0].numpy() - exp.Y_test) ** 2.0) ** 0.5
     nlpp = -np.mean(exp.model.predict_log_density((exp.X_test, exp.Y_test)))
-    elbo = exp.model.robust_maximum_log_likelihood_objective().numpy()
-    upper = exp.model.upper_bound().numpy()
     return elbo, upper, rmse, nlpp
 
 
