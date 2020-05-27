@@ -25,22 +25,20 @@ from inducing_init_experiments.utils import FullbatchUciExperiment
 dataset_names = ["Wilson_energy", "Naval_noisy"]
 init_from_baseline = False
 
-uci_train_settings.update(dict(Naval_noisy=([150], {}), Wilson_energy=([80], {}), Wilson_elevators=([1500], {})))
+uci_train_settings.update(dict(Naval_noisy=([70], {}), Wilson_energy=([70], {}), Wilson_elevators=([1200], {})))
 
 # Setup
 gpflow.config.set_default_positive_minimum(1.0e-5)
 gpflow.config.set_default_jitter(1e-10)
 
-num_seeds = 1
+num_seeds = 10
 seeds = np.arange(num_seeds)
 
 init_Z_methods = dict()
 init_Z_methods["Kmeans"] = [inducing_init.Kmeans(seed=seed) for seed in seeds]
 init_Z_methods["Greedy Conditional Variance"] = [inducing_init.ConditionalVariance(seed=seed) for seed in seeds]
 init_Z_methods["Gradient"] = [inducing_init.ConditionalVariance(seed=seed) for seed in seeds]
-experiment_name = "init-inducing"
-
-init_Z_before_hypers = False   # Always initialize hyperparameters then the variational parameters
+experiment_name = "opt-inducing"
 
 @dataclass
 class InitZBeforeHypers(FullbatchUciExperiment):
@@ -106,6 +104,7 @@ def run_baseline(baseline_exp):
     full_nlpp = -np.mean(baseline_exp.model.predict_log_density((baseline_exp.X_test, baseline_exp.Y_test)))
     return model_parameters, full_rmse, full_nlpp, baseline_lml
 
+
 baseline_exps = dict()
 all_model_parameters = dict()
 full_rmses = dict()
@@ -142,16 +141,18 @@ init_Z_runs = dict()
 init_Z_task_results = dict()
 for dataset_name in dataset_names:
     experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
-    common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0,
-                               max_variance=1001.0, training_procedure="reinit_Z")
+    common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name,
+                               max_lengthscale=1001.0, max_variance=1001.0, training_procedure="reinit_Z")
     Ms, dataset_custom_settings = uci_train_settings[dataset_name]
 
     init_Z_runs[dataset_name] = {}
     init_Z_task_results[dataset_name] = {}
     for method_name, init_Z_method in init_Z_methods.items():
+        training_procedure = "reinit_Z"
         settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": seeded_init_Z_method,
-                              "base_filename": "opthyp-fixed_Z", "initial_parameters": all_model_parameters[dataset_name],
-                              "init_Z_before_params": init_Z_before_hypers, **dataset_custom_settings}
+                              "base_filename": "opthyp-fixed_Z", "initial_parameters": {},
+                              "training_procedure": training_procedure,
+                              "init_Z_before_params": False, **dataset_custom_settings}
                               for M in Ms for seeded_init_Z_method in init_Z_method]
         init_Z_runs[dataset_name][method_name] = dict()
         init_Z_task_results[dataset_name][method_name] = dict()
@@ -167,34 +168,28 @@ for dataset_name in dataset_names:
 
 
 # Optimisation of Z
-method_names = ["Gradient"]
-
+method_name = "Gradient"
 for dataset_name in dataset_names:
     experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
     common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0,
                                max_variance=1001.0)
     Ms, dataset_custom_settings = uci_train_settings[dataset_name]
-    settings_for_runs = [{"model_class": "SGPR", "M": M,
-                          "training_procedure": "joint", "base_filename": "opthyp-reinit_Z",
-                          "initial_parameters": all_model_parameters[dataset_name],
-                          "init_Z_before_params": init_Z_before_hypers, **dataset_custom_settings}
-                          for M in Ms]
+    settings_for_runs = [{"model_class": "SGPR", "M": M, "training_procedure": "joint",
+                          "base_filename": "opthyp-reinit_Z", "initial_parameters": {},
+                          "init_Z_before_params": False, **dataset_custom_settings} for M in Ms]
 
-    for method_name in method_names:
-        init_Z_runs[dataset_name][method_name] = dict()
-        init_Z_task_results[dataset_name][method_name] = dict()
-        for M in Ms:
-            init_Z_runs[dataset_name][method_name][str(M)] = []
-            init_Z_task_results[dataset_name][method_name][str(M)] = []
+    init_Z_runs[dataset_name][method_name] = dict()
+    init_Z_task_results[dataset_name][method_name] = dict()
+    for M in Ms:
+        init_Z_runs[dataset_name][method_name][str(M)] = []
+        init_Z_task_results[dataset_name][method_name][str(M)] = []
 
     for seed in seeds:
-        for method_name, init_Z_method in zip(
-            method_names, [inducing_init.ConditionalVariance(seed=seed,sample=False),
-                                             inducing_init.ConditionalVariance(seed=seed,sample=True)]):
-            for run_settings in settings_for_runs:
-                exp = InitZBeforeHypers(**{**common_run_settings, **run_settings, "init_Z_method": init_Z_method})
-                result = run_sparse_opt(exp)
-                M = str(run_settings["M"])
-                init_Z_runs[dataset_name][method_name][M].append(exp)
-                init_Z_task_results[dataset_name][method_name][M].append(result)
+        init_Z_method = inducing_init.ConditionalVariance(seed=seed, sample=False)
+        for run_settings in settings_for_runs:
+            exp = InitZBeforeHypers(**{**common_run_settings, **run_settings, "init_Z_method": init_Z_method})
+            result = run_sparse_opt(exp)
+            M = str(run_settings["M"])
+            init_Z_runs[dataset_name][method_name][M].append(exp)
+            init_Z_task_results[dataset_name][method_name][M].append(result)
 

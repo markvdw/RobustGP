@@ -248,7 +248,6 @@ class GaussianProcessUciExperiment(UciExperiment):
     max_variance: Optional[float] = 1000.0
 
     training_procedure: Optional[str] = "joint"  # joint | reinit
-
     initial_parameters: Optional[dict] = field(default_factory=dict)
 
     # Populated during object life
@@ -288,15 +287,6 @@ class GaussianProcessUciExperiment(UciExperiment):
         if self.M > len(self.X_train):
             raise ValueError("Cannot have M > len(X).")
 
-        # if self.init_Z_method == "first":
-        #     Z = self.X_train[:self.M, :].copy()
-        # elif self.init_Z_method == "uniform":
-        #     Z = self.X_train[np.random.permutation(len(self.X_train))[:self.M], :].copy()
-        # elif self.init_Z_method == "greedy-trace":
-        #     Z = greedy_trace_init(self.model.kernel, self.X_train, self.M)
-        # else:
-        #     raise NotImplementedError
-
         Z, _ = self.init_Z_method(self.X_train, self.M, self.model.kernel)
 
         try:
@@ -307,8 +297,6 @@ class GaussianProcessUciExperiment(UciExperiment):
             self.model.inducing_variable.Z = gpflow.Parameter(Z)
 
     def init_params(self):
-        # if self.model_class == "GPR":
-        #     self.model.likelihood.variance = gpflow.Parameter(1.0, transform=gpflow.utilities.positive(1e-4))
         self.model.likelihood.variance.assign(0.01)
         gpflow.utilities.multiple_assign(self.model, self.initial_parameters)
 
@@ -351,30 +339,28 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
         print(f"Running {str(self)}")
 
         model = self.model
-
         loss_function = self.model.training_loss_closure(compile=True)
         robust_loss_function = lambda: -self.model.robust_maximum_log_likelihood_objective()
         # loss_function = tf.function(lambda jitter=None: -self.model.elbo(jitter))
         hist = LoggerCallback(model, robust_loss_function)
-
+        if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
+            opt = RobustScipy()
+        else:
+            raise NotImplementedError(f"I don't know {self.optimizer}")
         def run_optimisation():
-            if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
-                try:
-                    opt = RobustScipy()
-                    opt.minimize(
-                        loss_function,
-                        self.model.trainable_variables,
-                        robust_closure=robust_loss_function,
-                        method=self.optimizer,
-                        options=dict(maxiter=10000, disp=True),
-                        step_callback=hist,
-                    )
-                    print("")
-                except KeyboardInterrupt as e:
-                    if input("Optimisation aborted. Do you want to re-raise the KeyboardInterrupt? (y/n) ") == "y":
-                        raise e
-            else:
-                raise NotImplementedError(f"I don't know {self.optimizer}")
+            try:
+                opt.minimize(
+                    loss_function,
+                    self.model.trainable_variables,
+                    robust_closure=robust_loss_function,
+                    method=self.optimizer,
+                    options=dict(maxiter=1000, disp=True),
+                    step_callback=hist,
+                )
+                print("")
+            except KeyboardInterrupt as e:
+                if input("Optimisation aborted. Do you want to re-raise the KeyboardInterrupt? (y/n) ") == "y":
+                    raise e
 
         if self.training_procedure == "joint":
             run_optimisation()
@@ -409,4 +395,4 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
 
         # Store results
         self.trained_parameters = gpflow.utilities.read_values(model)
-        self.train_objective_hist = (hist.n_iters, hist.log_likelihoods)
+        self.train_objective_hist = opt.f_vals  #(hist.n_iters, hist.log_likelihoods)
