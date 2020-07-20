@@ -166,7 +166,7 @@ class ConditionalVariance(InducingPointInitializer):
             new_Z = training_inputs[j:j + 1]  # [1,D]
             dj = np.sqrt(di[j])  # float
             cj = ci[:m, j]  # [m, 1]
-            L = np.squeeze(kernel(training_inputs, new_Z, full_cov=True).numpy())  # [N]
+            L = np.round(np.squeeze(kernel(training_inputs, new_Z, full_cov=True).numpy()),20)  # [N]
             L[j] += 1e-12 # jitter
             ei = (L - np.dot(cj, ci[:m])) / dj
             ci[m, :] = ei
