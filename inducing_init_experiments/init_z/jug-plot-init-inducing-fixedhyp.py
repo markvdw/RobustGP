@@ -74,9 +74,10 @@ for dataset in dataset_names:
 # Plotting
 for dataset in dataset_names:
     dataset_plot_settings = dict(
-        Naval_noisy=dict(elbo_ylim=(-20e3, 45e3))
-        Wilson_energy = dict(elbo_ylim=(-2000, 1500))
-    ).get(dataset, dict(elbo_ylim=None))
+        Naval_noisy=dict(elbo_ylim=(-20e3, 45e3),nlpp_ylim=(-4,3),rmse_ylim=(0,.4)),
+        Wilson_energy = dict(elbo_ylim=(-1000, 1500),nlpp_ylim=(-2,2),rmse_ylim=(0,.38)),
+        Wilson_elevators = dict(elbo_ylim=(-20000,3000),nlpp_ylim=(.3,.7),rmse_ylim=(.3,.45))
+    ).get(dataset, dict(elbo_ylim=None,nlpp_ylim=None,rmse_ylim=None))
     l_elbo, l_rmse, l_nlpp = linear_baselines[dataset]
     m_elbo, m_rmse, m_nlpp = mean_baselines[dataset]
     fig, ax = plt.subplots()
@@ -97,26 +98,26 @@ for dataset in dataset_names:
     ax.set_xlabel("M")
     ax.set_ylabel("elbo")
     ax.set_ylim(dataset_plot_settings["elbo_ylim"])
+    plt.tight_layout()
     fig.savefig(f"./figures/fixedhyp-{dataset}-elbo.png")
 
     fig, ax = plt.subplots()
     for method in methods:
-        ax.plot(init_Z_Ms[dataset][method], init_Z_rmse[dataset][method]["Median"], label=f"{method} rmse",
-                color=l.get_color(), linestyle=(0, (3, 1, 1, 1, 1, 1)))
-        ax.fill_between(init_Z_Ms[dataset][method], init_Z_rmse[dataset][method]["20 pct"],
-                        init_Z_rmse[dataset][method]["80 pct"], color=l.get_color(),alpha=.2)
+        l, = ax.plot(init_Z_Ms[dataset][method], init_Z_rmses[dataset][method]["Median"], label=f"{method} rmse")
+        ax.fill_between(init_Z_Ms[dataset][method], init_Z_rmses[dataset][method]["20 pct"],
+                        init_Z_rmses[dataset][method]["80 pct"], color=l.get_color(),alpha=.2)
     ax.axhline(full_rmses[dataset], label="full GP", linestyle='--')
     ax.axhline(l_rmse, label="linear", linestyle='-.')
     ax.axhline(m_rmse, label="mean", linestyle=':')
     ax.legend()
     ax.set_xlabel("M")
     ax.set_ylabel("rmse")
+    ax.set_ylim(dataset_plot_settings["rmse_ylim"])
     fig.savefig(f"./figures/fixedhyp-{dataset}-rmse.png")
 
     fig, ax = plt.subplots()
     for method in methods:
-        ax.plot(init_Z_Ms[dataset][method], init_Z_nlpps[dataset][method]["Median"], label=f"{method} nlpp",
-                color=l.get_color(), linestyle=(0, (3, 1, 1, 1, 1, 1)))
+        l, = ax.plot(init_Z_Ms[dataset][method], init_Z_nlpps[dataset][method]["Median"], label=f"{method} nlpp")
         ax.fill_between(init_Z_Ms[dataset][method], init_Z_nlpps[dataset][method]["20 pct"],
                         init_Z_nlpps[dataset][method]["80 pct"], color=l.get_color(),alpha=.2)
     ax.axhline(full_nlpps[dataset], label="full GP", linestyle='--')
@@ -125,6 +126,7 @@ for dataset in dataset_names:
     ax.legend()
     ax.set_xlabel("M")
     ax.set_ylabel("nlpp")
+    ax.set_ylim(dataset_plot_settings["nlpp_ylim"])
     fig.savefig(f"./figures/fixedhyp-{dataset}-nlpp.png")
 
 plt.show()

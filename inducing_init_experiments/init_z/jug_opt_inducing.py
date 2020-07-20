@@ -22,10 +22,10 @@ from inducing_init_experiments.init_z.utils import uci_train_settings, print_pos
 from inducing_init_experiments.utils import FullbatchUciExperiment
 
 # Settings
-dataset_names = ["Wilson_energy", "Naval_noisy"]
+dataset_names = ["Wilson_energy", "Naval_noisy", "Wilson_elevators"]
 init_from_baseline = False
 
-uci_train_settings.update(dict(Naval_noisy=([70], {}), Wilson_energy=([70], {}), Wilson_elevators=([1200], {})))
+uci_train_settings.update(dict(Naval_noisy=([55], {}), Wilson_energy=([65], {}), Wilson_elevators=([1200], {})))
 
 # Setup
 gpflow.config.set_default_positive_minimum(1.0e-5)
