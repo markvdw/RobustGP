@@ -48,7 +48,7 @@ uci_train_settings = dict(
     Wilson_pendulum=([10, 100, 200, 500, 567], {}),  # Not sparse, due to very low noise
     Pendulum_noisy=([10, 100, 200, 500, 567], {}),  # Not sparse, due to very low noise
     Wilson_forest=([10, 100, 200, 400], {"kernel_name": "SquaredExponentialLinear"}),  # Bad
-    Wilson_energy=([10, 50, 100, 200, 500], {}),  # Good
+    Wilson_energy=([10, 30, 40, 50, 60, 70, 80, 90, 100, 200, 500], {}),  # Good
     Wilson_stock=([10, 50, 100, 200, 400, 450], {"kernel_name": "SquaredExponentialLinear"}),  # Mostly linear
     Wilson_housing=([100, 200, 300, 400], {})  # Bad
 )

@@ -246,7 +246,9 @@ class GaussianProcessUciExperiment(UciExperiment):
     kernel_name: Optional[str] = "SquaredExponential"
     init_Z_method: Optional[InducingPointInitializer] = FirstSubsample()
     max_lengthscale: Optional[float] = 1000.0
+    max_variance: Optional[float] = 1000.0
 
+    training_procedure: Optional[str] = "joint"  # joint | reinit
     initial_parameters: Optional[dict] = field(default_factory=dict)
 
     # Populated during object life
@@ -299,7 +301,7 @@ class GaussianProcessUciExperiment(UciExperiment):
             self.model.inducing_variable.Z = gpflow.Parameter(Z)
 
     def init_params(self):
-        self.model.likelihood.variance = gpflow.Parameter(0.01, transform=gpflow.utilities.positive(1e-5))
+        self.model.likelihood.variance.assign(0.01)
         gpflow.utilities.multiple_assign(self.model, self.initial_parameters)
 
         constrained_transform = tfp.bijectors.Sigmoid(
@@ -307,13 +309,24 @@ class GaussianProcessUciExperiment(UciExperiment):
             gpflow.utilities.to_default_float(self.max_lengthscale),
         )
 
+        var_constrained_transform = tfp.bijectors.Sigmoid(
+            gpflow.utilities.to_default_float(gpflow.config.default_positive_minimum()),
+            gpflow.utilities.to_default_float(self.max_variance),
+        )
+
         if self.kernel_name == "SquaredExponential":
             new_len = gpflow.Parameter(self.model.kernel.lengthscales.numpy(), transform=constrained_transform)
+            new_var = gpflow.Parameter(self.model.kernel.variance.numpy(), transform = var_constrained_transform)
             self.model.kernel.lengthscales = new_len
+            self.model.kernel.variance = new_var
         elif self.kernel_name == "SquaredExponentialLinear":
             new_len = gpflow.Parameter(self.model.kernel.kernels[0].lengthscales.numpy(),
                                        transform=constrained_transform)
             self.model.kernel.kernels[0].lengthscales = new_len
+            new_var_se = gpflow.Parameter(self.model.kernel[0].variance.numpy(), transform=var_constrained_transform)
+            new_var_lin = gpflow.Parameter(self.model.kernel[1].variance.numpy(), transform=var_constrained_transform)
+            self.model.kernel[0].variance = new_var_se
+            self.model.kernel[1].variance = new_var_lin
 
         # TODO: Check if "inducing_variable" is in one of the keys in `self.initial_parameters`, to make things work
         #       with non `InducingPoints` like inducing variables.
@@ -332,30 +345,28 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
         print(f"Running {str(self)}")
 
         model = self.model
-
         loss_function = self.model.training_loss_closure(compile=True)
         robust_loss_function = lambda: -self.model.robust_maximum_log_likelihood_objective()
         # loss_function = tf.function(lambda jitter=None: -self.model.elbo(jitter))
         hist = LoggerCallback(model, robust_loss_function)
-
+        if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
+            opt = RobustScipy()
+        else:
+            raise NotImplementedError(f"I don't know {self.optimizer}")
         def run_optimisation():
-            if self.optimizer == "l-bfgs-b" or self.optimizer == "bfgs":
-                try:
-                    opt = RobustScipy()
-                    opt.minimize(
-                        loss_function,
-                        self.model.trainable_variables,
-                        robust_closure=robust_loss_function,
-                        method=self.optimizer,
-                        options=dict(maxiter=10000, disp=True),
-                        step_callback=hist,
-                    )
-                    print("")
-                except KeyboardInterrupt as e:
-                    if input("Optimisation aborted. Do you want to re-raise the KeyboardInterrupt? (y/n) ") == "y":
-                        raise e
-            else:
-                raise NotImplementedError(f"I don't know {self.optimizer}")
+            try:
+                opt.minimize(
+                    loss_function,
+                    self.model.trainable_variables,
+                    robust_closure=robust_loss_function,
+                    method=self.optimizer,
+                    options=dict(maxiter=1000, disp=True),
+                    step_callback=hist,
+                )
+                print("")
+            except KeyboardInterrupt as e:
+                if input("Optimisation aborted. Do you want to re-raise the KeyboardInterrupt? (y/n) ") == "y":
+                    raise e
 
         if self.training_procedure == "joint":
             run_optimisation()
@@ -390,4 +401,4 @@ class FullbatchUciExperiment(GaussianProcessUciExperiment):
 
         # Store results
         self.trained_parameters = gpflow.utilities.read_values(model)
-        self.train_objective_hist = (hist.n_iters, hist.log_likelihoods)
+        self.train_objective_hist = opt.f_vals  #(hist.n_iters, hist.log_likelihoods)

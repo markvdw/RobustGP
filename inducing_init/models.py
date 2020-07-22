@@ -9,9 +9,9 @@ from gpflow.covariances import Kuf, Kuu
 from gpflow.kernels import Kernel
 from gpflow.mean_functions import MeanFunction
 from gpflow.models import GPR, SGPR
-from gpflow.models.training_mixins import RegressionData
+from gpflow.models.training_mixins import RegressionData, InputData
 from gpflow.utilities import positive, to_default_float
-
+from gpflow.models.model import MeanAndVariance
 
 class RobustObjectiveMixin:
     def __init__(self, *args, **kwargs):
@@ -38,6 +38,11 @@ class RobustObjectiveMixin:
             except tf.errors.InvalidArgumentError as e_inner:
                 e_msg = e_inner.message
                 if (("Cholesky" not in e_msg) and ("not invertible" not in e_msg)) or i == (N_orders - 1):
+                    print(e_msg)
+                    raise e_inner
+            except AssertionError as e_inner:
+                e_msg = e_inner.message
+                if i == (N_orders - 1):
                     print(e_msg)
                     raise e_inner
         if restore_jitter:
@@ -74,6 +79,9 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
         LB = tf.linalg.cholesky(B)
         Aerr = tf.linalg.matmul(A, err)
         c = tf.linalg.triangular_solve(LB, Aerr, lower=True) / sigma
+        trace_term = 0.5 * output_dim * tf.reduce_sum(Kdiag) / self.likelihood.variance
+        trace_term -= 0.5 * output_dim * tf.reduce_sum(tf.linalg.diag_part(AAT))
+        assert trace_term > 0. # tr(Kff - Qff) should be positive, numerical issues can arise here
 
         # compute log marginal bound
         bound = -0.5 * num_data * output_dim * np.log(2 * np.pi)
@@ -81,8 +89,7 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
         bound -= 0.5 * num_data * output_dim * tf.math.log(self.likelihood.variance)
         bound += -0.5 * tf.reduce_sum(tf.square(err)) / self.likelihood.variance
         bound += 0.5 * tf.reduce_sum(tf.square(c))
-        bound += -0.5 * output_dim * tf.reduce_sum(Kdiag) / self.likelihood.variance
-        bound += 0.5 * output_dim * tf.reduce_sum(tf.linalg.diag_part(AAT))
+        bound -= trace_term
 
         return bound
 
@@ -147,6 +154,102 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
         quad = -0.5 * tf.reduce_sum(tf.square(Y_data)) / corrected_noise + 0.5 * tf.reduce_sum(tf.square(v))
 
         return const + logdet + quad
+
+
+    def upper_bound(self) -> tf.Tensor:
+        """
+        Upper bound for the sparse GP regression marginal likelihood.  Note that
+        the same inducing points are used for calculating the upper bound, as are
+        used for computing the likelihood approximation. This may not lead to the
+        best upper bound. The upper bound can be tightened by optimising Z, just
+        like the lower bound. This is especially important in FITC, as FITC is
+        known to produce poor inducing point locations. An optimisable upper bound
+        can be found in https://github.com/markvdw/gp_upper.
+        The key reference is
+        ::
+          @misc{titsias_2014,
+            title={Variational Inference for Gaussian and Determinantal Point Processes},
+            url={http://www2.aueb.gr/users/mtitsias/papers/titsiasNipsVar14.pdf},
+            publisher={Workshop on Advances in Variational Inference (NIPS 2014)},
+            author={Titsias, Michalis K.},
+            year={2014},
+            month={Dec}
+          }
+        The key quantity, the trace term, can be computed via
+        >>> _, v = conditionals.conditional(X, model.inducing_variable.Z, model.kernel,
+        ...                                 np.zeros((len(model.inducing_variable), 1)))
+        which computes each individual element of the trace term.
+        """
+        X_data, Y_data = self.data
+        num_data = to_default_float(tf.shape(Y_data)[0])
+
+        Kdiag = self.kernel(X_data, full_cov=False)
+        kuu = Kuu(self.inducing_variable, self.kernel, jitter=self.jitter_variance)
+        kuf = Kuf(self.inducing_variable, self.kernel, X_data)
+
+        I = tf.eye(tf.shape(kuu)[0], dtype=default_float())
+
+        L = tf.linalg.cholesky(kuu)
+        A = tf.linalg.triangular_solve(L, kuf, lower=True)
+        AAT = tf.linalg.matmul(A, A, transpose_b=True)
+        B = I + AAT / self.likelihood.variance
+        LB = tf.linalg.cholesky(B)
+
+        # Using the Trace bound, from Titsias' presentation
+        c = tf.maximum(tf.reduce_sum(Kdiag) - tf.reduce_sum(tf.square(A)), 0)
+
+        # Alternative bound on max eigenval:
+        corrected_noise = self.likelihood.variance + c
+
+        const = -0.5 * num_data * tf.math.log(2 * np.pi * self.likelihood.variance)
+        logdet = -tf.reduce_sum(tf.math.log(tf.linalg.diag_part(LB)))
+
+        LC = tf.linalg.cholesky(I + AAT / corrected_noise)
+        v = tf.linalg.triangular_solve(
+            LC, tf.linalg.matmul(A, Y_data) / corrected_noise, lower=True
+        )
+        quad = -0.5 * tf.reduce_sum(tf.square(Y_data)) / corrected_noise + 0.5 * tf.reduce_sum(tf.square(v))
+
+        return const + logdet + quad
+
+
+    def predict_f(self, Xnew: InputData, full_cov=False, full_output_cov=False) -> MeanAndVariance:
+        """
+        Compute the mean and variance of the latent function at some new points
+        Xnew. For a derivation of the terms in here, see the associated SGPR
+        notebook.
+        """
+        X_data, Y_data = self.data
+        num_inducing = len(self.inducing_variable)
+        err = Y_data - self.mean_function(X_data)
+        kuf = Kuf(self.inducing_variable, self.kernel, X_data)
+        kuu = Kuu(self.inducing_variable, self.kernel, jitter=self.jitter_variance)
+        Kus = Kuf(self.inducing_variable, self.kernel, Xnew)
+        sigma = tf.sqrt(self.likelihood.variance)
+        L = tf.linalg.cholesky(kuu)
+        A = tf.linalg.triangular_solve(L, kuf, lower=True) / sigma
+        B = tf.linalg.matmul(A, A, transpose_b=True) + tf.eye(num_inducing, dtype=default_float())
+        LB = tf.linalg.cholesky(B)
+        Aerr = tf.linalg.matmul(A, err)
+        c = tf.linalg.triangular_solve(LB, Aerr, lower=True) / sigma
+        tmp1 = tf.linalg.triangular_solve(L, Kus, lower=True)
+        tmp2 = tf.linalg.triangular_solve(LB, tmp1, lower=True)
+        mean = tf.linalg.matmul(tmp2, c, transpose_a=True)
+        if full_cov:
+            var = (
+                    self.kernel(Xnew)
+                    + tf.linalg.matmul(tmp2, tmp2, transpose_a=True)
+                    - tf.linalg.matmul(tmp1, tmp1, transpose_a=True)
+            )
+            var = tf.tile(var[None, ...], [self.num_latent_gps, 1, 1])  # [P, N, N]
+        else:
+            var = (
+                    self.kernel(Xnew, full_cov=False)
+                    + tf.reduce_sum(tf.square(tmp2), 0)
+                    - tf.reduce_sum(tf.square(tmp1), 0)
+            )
+            var = tf.tile(var[:, None], [1, self.num_latent_gps])
+        return mean + self.mean_function(Xnew), var
 
 
 class RobustGPR(RobustObjectiveMixin, GPR):

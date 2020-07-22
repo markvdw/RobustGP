@@ -1,5 +1,5 @@
 from typing import Optional
-
+from dataclasses import field
 import numpy as np
 import scipy
 import tensorflow as tf
@@ -17,6 +17,11 @@ from gpflow.optimizers.scipy import (
 
 
 class RobustScipy(gpflow.optimizers.Scipy):
+
+    def __init__(self):
+        super().__init__()
+        self.f_vals = list()
+
     def minimize(
         self,
         closure: LossClosure,
@@ -105,6 +110,7 @@ class RobustScipy(gpflow.optimizers.Scipy):
                     raise e
                 print(f"Warning: CholeskyError. Attempting to continue.")
                 loss, grad = robust_tf_eval(tf.convert_to_tensor(x))
+            self.f_vals.append(loss.numpy())
             return loss.numpy().astype(np.float64), grad.numpy().astype(np.float64)
 
         return _eval

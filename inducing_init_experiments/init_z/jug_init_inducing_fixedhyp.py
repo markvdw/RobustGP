@@ -11,45 +11,38 @@ from inducing_init.utilities import set_trainable
 from inducing_init_experiments.init_z.utils import print_post_run, uci_train_settings
 from inducing_init_experiments.utils import FullbatchUciExperiment, LoggerCallback
 
-#
-#
 # Settings
-dataset_name = "Naval_noisy"
-# dataset_name = "Wilson_gas"
-
-
+dataset_names = ["Wilson_energy", "Naval_noisy", "Wilson_elevators"]
+num_seeds = 10
+seeds = np.arange(num_seeds)
+all_model_parameters = {}
 #
 #
 # Setup
 gpflow.config.set_default_positive_minimum(1.0e-5)
 gpflow.config.set_default_jitter(1e-10)
+init_Z_methods = dict()
+init_Z_methods["Uniform"] = [inducing_init.UniformSubsample(seed=seed) for seed in seeds]
+init_Z_methods["Greedy Conditional Variance"] = [inducing_init.ConditionalVariance(seed=seed) for seed in seeds]
+init_Z_methods["Sample Conditional Variance"] = [inducing_init.ConditionalVariance(sample=True,seed=seed) for seed in seeds]
+init_Z_methods["Kmeans"] = [inducing_init.Kmeans(seed = seed) for seed in seeds]
+init_Z_methods["M-DPP MCMC"] = [inducing_init.KdppMCMC(seed=seed) for seed in seeds]
+init_Z_methods["RLS"] = [inducing_init.RLS(seed=seed) for seed in seeds]
 
-init_Z_methods = [
-    inducing_init.FirstSubsample(),
-    inducing_init.ConditionalVariance(),
-    inducing_init.ConditionalVariance(sample=True),
-    inducing_init.Kmeans(),
-]
 experiment_name = "init-inducing"
 
-experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
-
-baseline_custom_settings = dict(
-    Naval_noisy={"model_class": "SGPR", "M": 1000, "training_procedure": "reinit_Z",
-                 "init_Z_method": inducing_init.ConditionalVariance(sample=False), "max_lengthscale": 1000.0}
-).get(dataset_name, dict(model_class="GPR", max_lengthscale=1000.0))
-
-common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0)
 
 uci_train_settings.update(dict(
     Naval_noisy=([10, 20, 30, 40, 45, 47, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100,
                   130, 150, 180, 200, 250, 300, 400, 500], {}),  # Very sparse solution exists
-    # Naval_noisy=([10, 20, 50, 100, 200, 500], {}),  # Very sparse solution exists
 ))
-Ms, dataset_custom_settings = uci_train_settings[dataset_name]
 
+def get_settings(dataset_name):
+    experiment_storage_path = f"./storage-{experiment_name}/{dataset_name}"
+    Ms, dataset_custom_settings = uci_train_settings[dataset_name]
+    common_run_settings = dict(storage_path=experiment_storage_path, dataset_name=dataset_name, max_lengthscale=1001.0,max_variance=1001.0)
+    return experiment_storage_path, Ms, common_run_settings, dataset_custom_settings
 
-#
 #
 # Experiment classes
 @dataclass
@@ -81,10 +74,9 @@ class FullbatchUciInducingOptExperiment(FullbatchUciExperiment):
                                  options=dict(maxiter=1000, disp=False), step_callback=hist)
                     print("")
                 except KeyboardInterrupt:
-                    pass  # TOOD: Come up with something better than just pass...
+                    pass  # TODO: Come up with something better than just pass...
             else:
                 raise NotImplementedError(f"I don't know {self.optimizer}")
-
         run_optimisation()
 
         # Store results
@@ -98,13 +90,6 @@ def compute_model_stats(exp):
     elbo = exp.model.elbo().numpy()
     upper = exp.model.upper_bound().numpy()
     return elbo, upper, rmse, nlpp
-
-
-#
-#
-# Baseline exp
-print("Baseline exp...")
-baseline_exp = FullbatchUciExperiment(**{**common_run_settings, **dataset_custom_settings, **baseline_custom_settings})
 
 
 @jug.TaskGenerator
@@ -124,17 +109,22 @@ def run_baseline(baseline_exp):
 
     return model_parameters, full_rmse, full_nlpp, baseline_lml
 
+# Baseline exp
+baseline_exps = {}
+full_rmses = {}
+full_nlpps = {}
+baseline_lmls = {}
+for dataset_name in dataset_names:
+    baseline_custom_settings = dict(
+        Naval_noisy={"model_class": "SGPR", "M": 1000, "training_procedure": "reinit_Z",
+                     "init_Z_method": inducing_init.ConditionalVariance(sample=False), "max_lengthscale": 1000.0, "max_variance":1000.0}
+    ).get(dataset_name, dict(model_class="GPR", max_lengthscale=1000.0, max_variance=1000.0))
+    experiment_storage_path, _ , common_run_settings, dataset_custom_settings = get_settings(dataset_name)
+    baseline_exps[dataset_name] = FullbatchUciExperiment(**{**common_run_settings, **dataset_custom_settings, **baseline_custom_settings})
+    all_model_parameters[dataset_name], full_rmses[dataset_name], full_nlpps[dataset_name], baseline_lmls[dataset_name] \
+        = jug.bvalue(run_baseline(baseline_exps[dataset_name]))
 
-model_parameters, full_rmse, full_nlpp, baseline_lml = jug.bvalue(run_baseline(baseline_exp))
 
-#
-#
-# Sparse experiments
-init_Z_runs = {}
-init_Z_task_results = {}
-
-
-# Simple initialisation
 @jug.TaskGenerator
 def run_sparse_init(exp):
     print(exp)
@@ -144,20 +134,32 @@ def run_sparse_init(exp):
     elbo, upper, rmse, nlpp = compute_model_stats(exp)
     return elbo, upper, rmse, nlpp
 
+# Sparse experiments
+init_Z_runs = {}
+init_Z_task_results = {}
 
-for init_Z_method in init_Z_methods:
-    settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": init_Z_method, **dataset_custom_settings}
-                         for M in Ms]
-    init_Z_runs[str(init_Z_method)] = []
-    init_Z_task_results[str(init_Z_method)] = []
-    for run_settings in settings_for_runs:
-        exp = FullbatchUciExperiment(**{**common_run_settings, **run_settings}, initial_parameters=model_parameters)
-        result = run_sparse_init(exp)
-        init_Z_runs[str(init_Z_method)].append(exp)
-        init_Z_task_results[str(init_Z_method)].append(result)
+for dataset_name in dataset_names:
+    init_Z_runs[dataset_name] = dict()
+    init_Z_task_results[dataset_name] = dict()
+    experiment_storage_path, Ms , common_run_settings, dataset_custom_settings = get_settings(dataset_name)
+    for method_name, init_Z_method in init_Z_methods.items():
+        init_Z_runs[dataset_name][method_name] = dict()
+        init_Z_task_results[dataset_name][method_name] = dict()
+        for M in Ms:
+            init_Z_runs[dataset_name][method_name][str(M)] = []
+            init_Z_task_results[dataset_name][method_name][str(M)] = []
+        settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": seeded_init_Z_method, **dataset_custom_settings}
+                            for M in Ms for seeded_init_Z_method in init_Z_method]
+        for run_settings in settings_for_runs:
+            M = str(run_settings["M"])
+            exp = FullbatchUciExperiment(**{**common_run_settings, **run_settings},
+                                         initial_parameters=all_model_parameters[dataset_name])
+            result = run_sparse_init(exp)
+            init_Z_runs[dataset_name][method_name][M].append(exp)
+            init_Z_task_results[dataset_name][method_name][M].append(result)
 
 
-# Bound optimisation
+# (Sparse) Bound optimisation
 @jug.TaskGenerator
 def run_sparse_opt(exp):
     print(exp)
@@ -166,23 +168,28 @@ def run_sparse_opt(exp):
     elbo, upper, rmse, nlpp = compute_model_stats(exp)
     return elbo, upper, rmse, nlpp
 
-
-settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": inducing_init.ConditionalVariance(sample=True),
-                      **dataset_custom_settings}
-                     for M in Ms]
-init_Z_runs["gradient"] = []
-init_Z_task_results["gradient"] = []
-upper_runs = []
-# for optimise_objective in ["upper", "lower"]:  # Optimising the upper bound makes hardly any difference
-for optimise_objective in ["lower"]:
-    for run_settings in settings_for_runs:
-        exp = FullbatchUciInducingOptExperiment(**{**common_run_settings, **run_settings},
-                                                initial_parameters=model_parameters,
-                                                optimise_objective=optimise_objective)
-        result = run_sparse_opt(exp)
-
-        if optimise_objective == "lower":
-            init_Z_runs["gradient"].append(exp)
-            init_Z_task_results["gradient"].append(result)
-        elif optimise_objective == "upper":
-            upper_runs.append(exp)
+upper_runs = dict()
+for dataset_name in dataset_names:
+    experiment_storage_path, Ms, common_run_settings, dataset_custom_settings = get_settings(dataset_name)
+    settings_for_runs = [{"model_class": "SGPR", "M": M, "init_Z_method": inducing_init.ConditionalVariance(sample=True, seed=seed),
+                        **dataset_custom_settings} for M in Ms for seed in seeds]
+    init_Z_runs[dataset_name]["gradient"] = dict()
+    init_Z_task_results[dataset_name]["gradient"] = dict()
+    upper_runs[dataset_name] = dict()
+    for M in Ms:
+        init_Z_runs[dataset_name]["gradient"][str(M)] = []
+        init_Z_task_results[dataset_name]["gradient"][str(M)] = []
+        upper_runs[dataset_name][str(M)] = []
+        # for optimise_objective in ["upper", "lower"]:  # Optimising the upper bound makes hardly any difference
+    for optimise_objective in ["lower"]:
+        for run_settings in settings_for_runs:
+            exp = FullbatchUciInducingOptExperiment(**{**common_run_settings, **run_settings},
+                                                    initial_parameters=all_model_parameters[dataset_name],
+                                                    optimise_objective=optimise_objective)
+            M = str(run_settings["M"])
+            result = run_sparse_opt(exp)
+            if optimise_objective == "lower":
+                init_Z_runs[dataset_name]["gradient"][str(M)].append(exp)
+                init_Z_task_results[dataset_name]["gradient"][str(M)].append(result)
+            elif optimise_objective == "upper":
+                upper_runs[dataset_name][str(M)].append(exp)
