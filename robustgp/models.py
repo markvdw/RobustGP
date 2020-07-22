@@ -13,10 +13,13 @@ from gpflow.models.training_mixins import RegressionData, InputData
 from gpflow.utilities import positive, to_default_float
 from gpflow.models.model import MeanAndVariance
 
+
 class RobustObjectiveMixin:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.jitter_variance = Parameter(default_jitter(), transform=positive(0.0), trainable=False, name="jitter")
+        self.jitter_variance = Parameter(
+            max(default_jitter(), 1e-20), transform=positive(0.0), trainable=False, name="jitter"
+        )
 
     def _compute_robust_maximum_log_likelihood_objective(self) -> tf.Tensor:
         raise NotImplementedError
@@ -29,8 +32,10 @@ class RobustObjectiveMixin:
             logjitter = np.log10(self.jitter_variance.numpy())
             if i > 0:
                 if i == 1:
-                    print(f"{type(self).__name__}: Failed first computation. "
-                          f"Now attempting computation with jitter ", end="")
+                    print(
+                        f"{type(self).__name__}: Failed first computation. " f"Now attempting computation with jitter ",
+                        end="",
+                    )
                 print(f"10**{logjitter:.2f} ", end="", flush=True)
             try:
                 val = self._compute_robust_maximum_log_likelihood_objective()
@@ -81,7 +86,7 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
         c = tf.linalg.triangular_solve(LB, Aerr, lower=True) / sigma
         trace_term = 0.5 * output_dim * tf.reduce_sum(Kdiag) / self.likelihood.variance
         trace_term -= 0.5 * output_dim * tf.reduce_sum(tf.linalg.diag_part(AAT))
-        assert trace_term > 0. # tr(Kff - Qff) should be positive, numerical issues can arise here
+        assert trace_term > 0.0  # tr(Kff - Qff) should be positive, numerical issues can arise here
 
         # compute log marginal bound
         bound = -0.5 * num_data * output_dim * np.log(2 * np.pi)
@@ -148,13 +153,10 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
         logdet = -tf.reduce_sum(tf.math.log(tf.linalg.diag_part(LB)))
 
         LC = tf.linalg.cholesky(I + AAT / corrected_noise)
-        v = tf.linalg.triangular_solve(
-            LC, tf.linalg.matmul(A, Y_data) / corrected_noise, lower=True
-        )
+        v = tf.linalg.triangular_solve(LC, tf.linalg.matmul(A, Y_data) / corrected_noise, lower=True)
         quad = -0.5 * tf.reduce_sum(tf.square(Y_data)) / corrected_noise + 0.5 * tf.reduce_sum(tf.square(v))
 
         return const + logdet + quad
-
 
     def upper_bound(self) -> tf.Tensor:
         """
@@ -205,13 +207,10 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
         logdet = -tf.reduce_sum(tf.math.log(tf.linalg.diag_part(LB)))
 
         LC = tf.linalg.cholesky(I + AAT / corrected_noise)
-        v = tf.linalg.triangular_solve(
-            LC, tf.linalg.matmul(A, Y_data) / corrected_noise, lower=True
-        )
+        v = tf.linalg.triangular_solve(LC, tf.linalg.matmul(A, Y_data) / corrected_noise, lower=True)
         quad = -0.5 * tf.reduce_sum(tf.square(Y_data)) / corrected_noise + 0.5 * tf.reduce_sum(tf.square(v))
 
         return const + logdet + quad
-
 
     def predict_f(self, Xnew: InputData, full_cov=False, full_output_cov=False) -> MeanAndVariance:
         """
@@ -237,16 +236,16 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
         mean = tf.linalg.matmul(tmp2, c, transpose_a=True)
         if full_cov:
             var = (
-                    self.kernel(Xnew)
-                    + tf.linalg.matmul(tmp2, tmp2, transpose_a=True)
-                    - tf.linalg.matmul(tmp1, tmp1, transpose_a=True)
+                self.kernel(Xnew)
+                + tf.linalg.matmul(tmp2, tmp2, transpose_a=True)
+                - tf.linalg.matmul(tmp1, tmp1, transpose_a=True)
             )
             var = tf.tile(var[None, ...], [self.num_latent_gps, 1, 1])  # [P, N, N]
         else:
             var = (
-                    self.kernel(Xnew, full_cov=False)
-                    + tf.reduce_sum(tf.square(tmp2), 0)
-                    - tf.reduce_sum(tf.square(tmp1), 0)
+                self.kernel(Xnew, full_cov=False)
+                + tf.reduce_sum(tf.square(tmp2), 0)
+                - tf.reduce_sum(tf.square(tmp1), 0)
             )
             var = tf.tile(var[:, None], [1, self.num_latent_gps])
         return mean + self.mean_function(Xnew), var
@@ -254,11 +253,11 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
 
 class RobustGPR(RobustObjectiveMixin, GPR):
     def __init__(
-            self,
-            data: RegressionData,
-            kernel: Kernel,
-            mean_function: Optional[MeanFunction] = None,
-            noise_variance: float = 1.0,
+        self,
+        data: RegressionData,
+        kernel: Kernel,
+        mean_function: Optional[MeanFunction] = None,
+        noise_variance: float = 1.0,
     ):
         super().__init__(data, kernel, mean_function, noise_variance)
 
@@ -279,8 +278,10 @@ class RobustGPR(RobustObjectiveMixin, GPR):
         k_diag = tf.linalg.diag_part(K)
         noiseK_L, L = tf.cond(
             self.likelihood.variance > self.jitter_variance,
-            lambda: (tf.linalg.cholesky(tf.linalg.set_diag(K, k_diag + self.likelihood.variance)),
-                     tf.linalg.cholesky(tf.linalg.set_diag(K, k_diag + self.jitter_variance))),
+            lambda: (
+                tf.linalg.cholesky(tf.linalg.set_diag(K, k_diag + self.likelihood.variance)),
+                tf.linalg.cholesky(tf.linalg.set_diag(K, k_diag + self.jitter_variance)),
+            ),
             lambda: (tf.linalg.cholesky(tf.linalg.set_diag(K, k_diag + self.jitter_variance)),) * 2,
         )
 

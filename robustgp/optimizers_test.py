@@ -7,7 +7,10 @@ from .models import RobustSGPR, RobustGPR
 from .optimizers import RobustScipy
 from .utilities import set_trainable
 
-X = np.random.rand(500, 1)
+gpflow.config.set_default_jitter(0.0)
+
+np.random.seed(0)
+X = np.random.rand(1000, 1)
 Y = np.hstack((np.sin(X), np.cos(X)))
 
 
@@ -19,6 +22,7 @@ Y = np.hstack((np.sin(X), np.cos(X)))
     ],
 )
 def test_optimize_stability(model):
+    print(gpflow.config.default_jitter())
     model.jitter_variance.assign(1e-14)
     print(model.jitter_variance.numpy())
     model.likelihood.variance = gpflow.Parameter(1.0, transform=gpflow.utilities.positive(lower=1e-16))
