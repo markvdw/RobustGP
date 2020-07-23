@@ -53,8 +53,6 @@ def get_indices_and_weights(weighted_leverage, active_indices, k, top_level, M):
             indices = np.append(indices, additional_indices)
         indices_to_include = active_indices[indices]
         column_weights = np.sqrt(1. / probs[indices])
-        if len(indices_to_include) < M:
-            import pdb; pdb.set_trace()
     else:
         probs = probs * M / np.sum(probs)
         random_nums = np.random.rand(len(probs))
@@ -92,10 +90,8 @@ def recursive_rls(training_inputs: np.ndarray,
                                                               active_indices=active_indices[s_bar])
     Z = training_inputs[indices_to_include]
     SKS = kernel(Z) * column_weights[None, :] * column_weights[:, None]  # sketched kernel matrix
-    try:
-        eigvals = scipy.sparse.linalg.eigsh(SKS.numpy(), k=k, which='LM', return_eigenvectors=False)
-    except:
-        import pdb; pdb.set_trace()
+    eigvals = scipy.sparse.linalg.eigsh(SKS.numpy(), k=k, which='LM', return_eigenvectors=False)
+
     lam = 1 / k * (np.sum(np.diag(SKS)) - np.sum(eigvals))
     lam = np.maximum(1e-12, lam)
 
