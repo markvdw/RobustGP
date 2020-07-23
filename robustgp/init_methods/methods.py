@@ -4,7 +4,7 @@ from typing import Callable, Optional
 import numpy as np
 import scipy.cluster
 
-from .utils import sample_discrete, accept_or_reject, get_indices_and_weights, approximate_rls, recursive_rls
+from ..utils import sample_discrete
 
 
 class InducingPointInitializer:
@@ -197,79 +197,8 @@ class ConditionalVariance(InducingPointInitializer):
         return f"{type(self).__name__}({params})"
 
 
-class KdppMCMC(ConditionalVariance):
-
-    def __init__(self, num_steps: Optional[int] = 10000, seed: Optional[int] = 0, **kwargs):
-        """
-        Implements the MCMC approximation to sampling from a k-DPP developed in
-        @inproceedings{anari2016monte,
-                       title={Monte Carlo Markov chain algorithms for sampling strongly Rayleigh distributions and determinantal point processes},
-                       author={Anari, Nima and Gharan, Shayan Oveis and Rezaei, Alireza},
-                       booktitle={Conference on Learning Theory},
-                       pages={103--115},
-                       year={2016}
-                    }
-        and used for initializing inducing point in
-        @inproceedings{burt2019rates,
-                       title={Rates of Convergence for Sparse Variational Gaussian Process Regression},
-                       author={Burt, David and Rasmussen, Carl Edward and Van Der Wilk, Mark},
-                       booktitle={International Conference on Machine Learning},
-                       pages={862--871},
-                      year={2019}
-            }
-        More information on determinantal point processes and related algorithms can be found at:
-        https://github.com/guilgautier/DPPy
-        :param sample: int, number of steps of MCMC to run
-        :param threshold: float or None, if not None, if tr(Kff-Qff)<threshold, stop choosing inducing points as the approx.
-        has converged.
-        """
-        super().__init__(seed=seed, **kwargs)
-        self.num_steps = num_steps
-
-    def compute_initialisation(self, training_inputs: np.ndarray, M: int,
-                               kernel: Callable[[np.ndarray, Optional[np.ndarray], Optional[bool]], np.ndarray]):
-        """
-        :param training_inputs: training_inputs: [N,D] numpy array
-        :param M: int, number of inducing inputs to return
-        :param kernel: kernelwrapper object
-        :param num_steps: number of swap steps to perform.
-        :param init_indices: array of M indices or None, set used to initialize mcmc alg. if None, we use the greedy MAP
-        init. (variance, with sample=False)
-        :return: inducing inputs, indices, [M], np.array of ints indices of these inputs in training data array
-        """
-        N = training_inputs.shape[0]
-        _, indices = super().compute_initialisation(training_inputs, M, kernel)
-        kzz = kernel(training_inputs[indices], None, full_cov=True)
-        Q, R = scipy.linalg.qr(kzz, overwrite_a=True)
-        if np.min(np.abs(np.diag(R))) == 0:
-            warnings.warn("Determinant At initialization is numerically 0, MCMC was not run")
-            return training_inputs[indices], indices
-        for _ in range(self.num_steps):
-            if np.random.rand() < .5:  # lazy MCMC, half the time, no swap is performed
-                continue
-            indices_complement = np.delete(np.arange(N), indices)
-            s = np.random.randint(M)
-            t = np.random.choice(indices_complement)
-            swap, Q, R = accept_or_reject(training_inputs, kernel, indices, s, t, Q, R)
-            if swap:
-                indices = np.delete(indices, s, axis=0)
-                indices = np.append(indices, [t], axis=0)
-        return training_inputs[indices], indices
 
 
-class RLS(InducingPointInitializer):
-    """
-    TODO: Add relevant references, probably Alaoui and Mahoney, Musco and Musco and Calandriello et al.
-    """
-
-    def __init__(self, seed: Optional[int] = 0, **kwargs):
-        super().__init__(seed=seed, randomized=True, **kwargs)
-
-
-    def compute_initialisation(self, training_inputs: np.ndarray, M: int,
-                               kernel: Callable[[np.ndarray, Optional[np.ndarray], Optional[bool]], np.ndarray]):
-        indices, _, _ = recursive_rls(training_inputs, M, kernel, np.arange(training_inputs.shape[0]))
-        return training_inputs[indices], indices
 
 
 

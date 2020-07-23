@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from gpflow.kernels import SquaredExponential
-from .init_methods import FirstSubsample, UniformSubsample, Kmeans, ConditionalVariance
+from .methods import FirstSubsample, UniformSubsample, Kmeans, ConditionalVariance
 
 
 @pytest.mark.parametrize("init_method", [FirstSubsample(seed=0), UniformSubsample(seed=0), Kmeans(seed=0),
