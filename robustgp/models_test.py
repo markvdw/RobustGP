@@ -5,6 +5,7 @@ import tensorflow as tf
 import gpflow
 from .models import RobustSGPR, RobustGPR
 
+np.random.seed(0)
 X = np.random.rand(1000, 1)
 Y = np.hstack((np.sin(X), np.cos(X)))
 
@@ -17,6 +18,8 @@ Y = np.hstack((np.sin(X), np.cos(X)))
     ],
 )
 def test_sgpr_stability(model):
+    print(gpflow.config.default_jitter())
+
     # Setup hyperparmaeters
     initial_jitter = 1e-6
     model.kernel.variance.assign(2.3)

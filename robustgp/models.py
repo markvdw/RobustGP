@@ -46,7 +46,7 @@ class RobustObjectiveMixin:
                     print(e_msg)
                     raise e_inner
             except AssertionError as e_inner:
-                e_msg = e_inner.message
+                e_msg = e_inner.args
                 if i == (N_orders - 1):
                     print(e_msg)
                     raise e_inner
@@ -86,7 +86,9 @@ class RobustSGPR(RobustObjectiveMixin, SGPR):
         c = tf.linalg.triangular_solve(LB, Aerr, lower=True) / sigma
         trace_term = 0.5 * output_dim * tf.reduce_sum(Kdiag) / self.likelihood.variance
         trace_term -= 0.5 * output_dim * tf.reduce_sum(tf.linalg.diag_part(AAT))
-        assert trace_term > 0.0  # tr(Kff - Qff) should be positive, numerical issues can arise here
+
+        # tr(Kff - Qff) should be positive, numerical issues can arise here
+        assert trace_term > 0.0, f"Trace term negative, should be positive ({trace_term:.4e})."
 
         # compute log marginal bound
         bound = -0.5 * num_data * output_dim * np.log(2 * np.pi)
