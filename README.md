@@ -35,8 +35,13 @@ is used, see the class ```FullbatchUciExperiment``` in the ```robustgp_experimen
 All the experiments from Burt et al (2020) are included  in the ```robustgp_experiments``` directory.
 
 ## Code guidelines
-- To set up, make sure that [GPflow](https://github.com/GPflow/GPflow) is installed, followed by running ```pip setup.py develop```.
+For using the initialisation code:
+- Make sure that [GPflow](https://github.com/GPflow/GPflow) is installed, followed by running ```pip setup.py develop```.
 - Tests can be run using ```pytest -x --cov-report html --cov=robustgp```.
+
+For running the experiments
+- We use code from [Bayesian benchmarks](https://github.com/hughsalimbeni/bayesian_benchmarks) to handle dataset
+  loading. Some assembly needed to get all the datasets.
 - Some scripts are paralellised using `jug`.
   - Make sure it's installed using `pip install jug`.
   - You can run all the tasks in a script in parallel by running `jug execute jug_script.py` multiple times.

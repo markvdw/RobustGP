@@ -10,10 +10,10 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 import gpflow
-from inducing_init import InducingPointInitializer, FirstSubsample
-from inducing_init.models import RobustGPR, RobustSGPR
-from inducing_init.optimizers import RobustScipy
-from inducing_init.utilities import set_trainable
+from robustgp import InducingPointInitializer, FirstSubsample
+from robustgp.models import RobustGPR, RobustSGPR
+from robustgp.optimizers import RobustScipy
+from robustgp.utilities import set_trainable
 from . import data
 from .storing import get_next_filename
 
