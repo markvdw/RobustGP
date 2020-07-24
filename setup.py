@@ -2,9 +2,8 @@ from setuptools import setup, find_packages
 
 requirements = [
     'numpy>=1.18.1',
-    'tensorflow>=2.2.0',
     'scipy>=1.4.1',
-    'matplotlib>=3.3.1',
+    'matplotlib>=3.1.3',
     'json_tricks',
     'jug'
 ]
