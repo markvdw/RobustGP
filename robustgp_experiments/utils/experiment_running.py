@@ -4,12 +4,12 @@ from functools import reduce
 from glob import glob
 from typing import Optional
 
+import gpflow
 import json_tricks
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 
-import gpflow
 from robustgp import InducingPointInitializer, FirstSubsample
 from robustgp.models import RobustGPR, RobustSGPR
 from robustgp.optimizers import RobustScipy

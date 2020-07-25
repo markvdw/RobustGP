@@ -24,11 +24,11 @@ def snelson1d(path="./.data/"):
       Tuple of two np.darray `inputs` and `outputs` with 200 rows and 1 column.
     """
     path = os.path.expanduser(path)
-    inputs_path = os.path.join(path, 'snelson_train_inputs')
-    outputs_path = os.path.join(path, 'snelson_train_outputs')
+    inputs_path = os.path.join(path, "snelson_train_inputs")
+    outputs_path = os.path.join(path, "snelson_train_outputs")
 
     # Contains all source as well. We just need the data.
-    url = 'http://www.gatsby.ucl.ac.uk/~snelson/SPGP_dist.zip'
+    url = "http://www.gatsby.ucl.ac.uk/~snelson/SPGP_dist.zip"
 
     if not (os.path.exists(inputs_path) and os.path.exists(outputs_path)):
         maybe_download_and_extract(path, url)

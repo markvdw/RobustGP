@@ -6,6 +6,7 @@ Burt et al (2019, 2020) (see sitation below), and implements the recommendations
 In Burt et al (2020), we recommend Sparse GP Regression (SGPR) (Titsias, 2009) models to be trained in the following way:
 - Initialise the inducing inputs using the ```ConditionalVariance``` methods.
 - Alternately optimise the hyperparameters only and reinitialise the inducing inputs using ```ConditionalVariance```.
+  See ```FullbatchUciExperiment``` for an example on how to implement this (```training_procedure == 'reinit_Z'```).
 
 We find that when using ```ConditionalVariance``` we obtain the same performance as gradient-optimised inducing inputs
 with a slightly larger number of inducing varianbles. The benefit is not having to do gradient-based optimisation, which

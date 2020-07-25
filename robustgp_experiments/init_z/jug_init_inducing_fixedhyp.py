@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 from typing import Optional
 
+import gpflow
 import jug
 import numpy as np
 import tensorflow as tf
 
-import gpflow
 import robustgp
 from robustgp.utilities import set_trainable
 from robustgp_experiments.init_z.utils import print_post_run, uci_train_settings
@@ -13,7 +13,7 @@ from robustgp_experiments.utils import FullbatchUciExperiment, LoggerCallback
 
 # Settings
 dataset_names = ["Wilson_energy", "Naval_noisy", "Wilson_elevators"]
-num_seeds = 10  #
+num_seeds = 10
 seeds = np.arange(num_seeds)
 all_model_parameters = {}
 
