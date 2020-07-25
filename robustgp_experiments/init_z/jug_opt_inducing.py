@@ -177,15 +177,15 @@ for dataset_name in dataset_names:
             init_Z_task_results[dataset_name][method_name][M].append(result)
 
 
-# all_model_parameters = dict()
-# full_rmses = dict()
-# full_nlpps = dict()
-# baseline_lmls = dict()
-# # Put trained values in variables
-# for dataset_name in dataset_names:
-#     (
-#         all_model_parameters[dataset_name],
-#         full_rmses[dataset_name],
-#         full_nlpps[dataset_name],
-#         baseline_lmls[dataset_name],
-#     ) = jug.bvalue(run_baseline(baseline_exps[dataset_name]))
+all_model_parameters = dict()
+full_rmses = dict()
+full_nlpps = dict()
+baseline_lmls = dict()
+# Put trained values in variables
+for dataset_name in dataset_names:
+    (
+        all_model_parameters[dataset_name],
+        full_rmses[dataset_name],
+        full_nlpps[dataset_name],
+        baseline_lmls[dataset_name],
+    ) = jug.bvalue(run_baseline(baseline_exps[dataset_name]))

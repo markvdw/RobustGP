@@ -4,7 +4,7 @@ from typing import Callable, Optional
 import numpy as np
 import scipy.cluster
 
-from ..utils import sample_discrete
+from robustgp.init_methods.misc import sample_discrete
 
 
 class InducingPointInitializer:
@@ -97,10 +97,10 @@ class Kmeans(InducingPointInitializer):
         centroids, _ = scipy.cluster.vq.kmeans(training_inputs, M)
         # Some times K-Means returns fewer than K centroids, in this case we sample remaining point from data
         if len(centroids) < M:
-            num_extra_points =  M - len(centroids)
+            num_extra_points = M - len(centroids)
             indices = np.random.choice(N, size=num_extra_points, replace=False)
             additional_points = training_inputs[indices]
-            centroids = np.concatenate([centroids, additional_points], axis = 0)
+            centroids = np.concatenate([centroids, additional_points], axis=0)
         return centroids * training_inputs_stds, None
 
 
@@ -166,8 +166,8 @@ class ConditionalVariance(InducingPointInitializer):
             new_Z = training_inputs[j:j + 1]  # [1,D]
             dj = np.sqrt(di[j])  # float
             cj = ci[:m, j]  # [m, 1]
-            L = np.round(np.squeeze(kernel(training_inputs, new_Z, full_cov=True).numpy()),20)  # [N]
-            L[j] += 1e-12 # jitter
+            L = np.round(np.squeeze(kernel(training_inputs, new_Z, full_cov=True).numpy()), 20)  # [N]
+            L[j] += 1e-12  # jitter
             ei = (L - np.dot(cj, ci[:m])) / dj
             ci[m, :] = ei
             try:
@@ -195,11 +195,3 @@ class ConditionalVariance(InducingPointInitializer):
                             k not in ['_randomized'] and
                             not (k == "threshold" and self.threshold == 0.0)])
         return f"{type(self).__name__}({params})"
-
-
-
-
-
-
-
-

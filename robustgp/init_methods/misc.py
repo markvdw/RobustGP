@@ -1,6 +1,6 @@
-
 import numpy as np
 import warnings
+
 np.seterr(all='raise')
 
 
@@ -13,18 +13,3 @@ def sample_discrete(unnormalized_probs):
         return np.random.choice(a=N, size=1)[0]
     probs = unnormalized_probs / normalization
     return np.random.choice(a=N, size=1, p=probs)[0]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
