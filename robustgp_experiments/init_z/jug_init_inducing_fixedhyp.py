@@ -13,7 +13,7 @@ from robustgp_experiments.utils import FullbatchUciExperiment, LoggerCallback
 
 # Settings
 dataset_names = ["Wilson_energy", "Naval_noisy", "Wilson_elevators"]
-num_seeds = 10
+num_seeds = 3  # Use 10 to replicate experiments from paper
 seeds = np.arange(num_seeds)
 all_model_parameters = {}
 
@@ -25,10 +25,10 @@ gpflow.config.set_default_jitter(1e-10)
 init_Z_methods = dict()
 init_Z_methods["Uniform"] = [robustgp.UniformSubsample(seed=seed) for seed in seeds]
 init_Z_methods["Greedy Conditional Variance"] = [robustgp.ConditionalVariance(seed=seed) for seed in seeds]
-init_Z_methods["Sample Conditional Variance"] = [robustgp.ConditionalVariance(sample=True, seed=seed) for seed in seeds]
+# init_Z_methods["Sample Conditional Variance"] = [robustgp.ConditionalVariance(sample=True, seed=seed) for seed in seeds]
 init_Z_methods["Kmeans"] = [robustgp.Kmeans(seed=seed) for seed in seeds]
-init_Z_methods["M-DPP MCMC"] = [robustgp.KdppMCMC(seed=seed) for seed in seeds]
-init_Z_methods["RLS"] = [robustgp.RLS(seed=seed) for seed in seeds]
+# init_Z_methods["M-DPP MCMC"] = [robustgp.KdppMCMC(seed=seed) for seed in seeds]
+# init_Z_methods["RLS"] = [robustgp.RLS(seed=seed) for seed in seeds]
 
 experiment_name = "init-inducing"
 
@@ -183,6 +183,8 @@ for dataset_name in dataset_names:
         ]
         for run_settings in settings_for_runs:
             M = str(run_settings["M"])
+            # TODO: A better approach would be to put the bvalue at this point, so other jobs could run before the last
+            #       full GP finishes.
             exp = FullbatchUciExperiment(
                 **{**common_run_settings, **run_settings}, initial_parameters=all_model_parameters[dataset_name]
             )

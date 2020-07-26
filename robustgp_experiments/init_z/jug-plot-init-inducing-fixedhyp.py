@@ -11,7 +11,7 @@ import jug.task
 import matplotlib.pyplot as plt
 import numpy as np
 
-from inducing_init_experiments.utils import baselines
+from robustgp_experiments.utils import baselines
 
 import matplotlib
 matplotlib.rcParams['axes.spines.right'] = False

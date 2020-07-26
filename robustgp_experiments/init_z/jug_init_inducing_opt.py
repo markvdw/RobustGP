@@ -44,12 +44,12 @@ seeds = np.arange(num_seeds)
 init_Z_methods = dict()
 init_Z_methods["Uniform"] = [robustgp.UniformSubsample(seed=seed) for seed in seeds]
 init_Z_methods["Greedy Conditional Variance"] = [robustgp.ConditionalVariance(seed=seed) for seed in seeds]
-init_Z_methods["Sample Conditional Variance"] = [robustgp.ConditionalVariance(sample=True, seed=seed) for seed in seeds]
+# init_Z_methods["Sample Conditional Variance"] = [robustgp.ConditionalVariance(sample=True, seed=seed) for seed in seeds]
 init_Z_methods["Kmeans"] = [robustgp.Kmeans(seed=seed) for seed in seeds]
-init_Z_methods["M-DPP MCMC"] = [robustgp.KdppMCMC(seed=seed) for seed in seeds]
-init_Z_methods["RLS"] = [robustgp.RLS(seed=seed) for seed in seeds]
+# init_Z_methods["M-DPP MCMC"] = [robustgp.KdppMCMC(seed=seed) for seed in seeds]
+# init_Z_methods["RLS"] = [robustgp.RLS(seed=seed) for seed in seeds]
 
-experiment_name = "init-inducing"
+experiment_name = "init-inducing-opt"
 
 
 def compute_model_stats(exp):
