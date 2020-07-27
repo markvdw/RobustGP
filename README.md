@@ -19,6 +19,20 @@ A few anecdotal suggestions for practitioners:
   e.g. raising jitter. ```ConditionalVariance``` will repel the inducing inputs based on any new hyperparameters which
   caused high correlation between old inducing variables, leading to better conditioning of ```Kuu```.
   
+### Example
+```
+M = 1000  # We choose 1000 inducing variables
+k = gpflow.kernels.SquaredExponential()
+# Initialise hyperparameters here
+init_method = robustgp.ConditionalVariance()
+Z = init_method.compute_initialisation(X, M, k)[0]
+model = gpflow.models.SGPR((X_train, Y_train), k, Z)
+for _ in range(10):
+    # Optimise w.r.t. hyperparmeters here...
+    Z = init_method.compute_initialisation(X, M, k)[0]  # Reinit with the new kernel hyperparameters
+    self.model.inducing_variable.Z = gpflow.Parameter(Z)
+```
+  
 ## What the code provides
 ### Inducing input initialisation
 We provide various inducing point initialisation methods, together with some tools for robustly optimising GPflow 
@@ -52,12 +66,21 @@ For running the experiments
 ## Citation
 To cite the recommendations in our paper or this accompanying software, please refer to our JMLR paper.
 ```
-To appear
+@article{burt2020gpviconv,
+  author  = {David R. Burt and Carl Edward Rasmussen and Mark van der Wilk},
+  title   = {Convergence of Sparse Variational Inference in Gaussian Processes Regression},
+  journal = {Journal of Machine Learning Research},
+  year    = {2020},
+  volume  = {21},
+  number  = {131},
+  pages   = {1-63},
+  url     = {http://jmlr.org/papers/v21/19-1015.html}
+}
 ```
 
 This JMLR paper is an extended version of our ICML paper.
 ```
-@InProceedings{,
+@InProceedings{burt2019gpviconv,
   title = 	 {Rates of Convergence for Sparse Variational {G}aussian Process Regression},
   author = 	 {Burt, David and Rasmussen, Carl Edward and van der Wilk, Mark},
   booktitle = 	 {Proceedings of the 36th International Conference on Machine Learning},
