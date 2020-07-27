@@ -20,7 +20,7 @@ A few anecdotal suggestions for practitioners:
   caused high correlation between old inducing variables, leading to better conditioning of ```Kuu```.
   
 ### Example
-```
+```python
 M = 1000  # We choose 1000 inducing variables
 k = gpflow.kernels.SquaredExponential()
 # Initialise hyperparameters here
