@@ -6,9 +6,9 @@ import jug
 import numpy as np
 
 import gpflow
-import inducing_init
-from inducing_init_experiments.init_z.utils import uci_train_settings, good_datasets, print_post_run
-from inducing_init_experiments.utils import FullbatchUciExperiment
+import robustgp as inducing_init
+from robustgp_experiments.init_z.utils import uci_train_settings, good_datasets, print_post_run
+from robustgp_experiments.utils import FullbatchUciExperiment
 
 gpflow.config.set_default_jitter(1e-8)
 gpflow.config.set_default_positive_minimum(1.0e-5)
@@ -16,12 +16,12 @@ gpflow.config.set_default_positive_minimum(1.0e-5)
 MAXITER = 1000
 
 experiment_name = "search-uci"
-# dataset_names = ["Wilson_energy", "Wilson_pendulum", "Pendulum_noisy", "Wilson_concrete", "Wilson_airfoil",
-#                  "Wilson_wine", "Wilson_skillcraft", "Wilson_sml", "Wilson_parkinsons", "Parkinsons_noisy"]
-dataset_names = ["Wilson_stock", "Wilson_energy", "Pendulum_noisy", "Wilson_pendulum", "Wilson_concrete",
-                 "Wilson_airfoil", "Wilson_wine", "Naval_noisy", "Naval", "Wilson_gas", "Wilson_skillcraft",
-                 "Wilson_sml", "Wilson_parkinsons", "Parkinsons_noisy", "Power", "Wilson_pol", "Wilson_elevators",
-                 "Wilson_bike", "Wilson_kin40k", "Wilson_protein", "Wilson_tamielectric"]
+dataset_names = ["Wilson_energy", "Wilson_autompg", "Wilson_concrete", "Wilson_airfoil", "Wilson_servo",
+                 "Wilson_concreteslump"]
+# dataset_names = ["Wilson_stock", "Wilson_energy", "Pendulum_noisy", "Wilson_pendulum", "Wilson_concrete",
+#                  "Wilson_airfoil", "Wilson_wine", "Naval_noisy", "Naval", "Wilson_gas", "Wilson_skillcraft",
+#                  "Wilson_sml", "Wilson_parkinsons", "Parkinsons_noisy", "Power", "Wilson_pol", "Wilson_elevators",
+#                  "Wilson_bike", "Wilson_kin40k", "Wilson_protein", "Wilson_tamielectric"]
 # dataset_names = good_datasets
 
 Z_init_method = inducing_init.ConditionalVariance(sample=True)
@@ -54,7 +54,9 @@ def sparse_cached_run(exp):
     # lml = exp.model.log_marginal_likelihood().numpy() if exp.model_class == "GPR" else exp.model.elbo().numpy()
     lml = exp.model.robust_maximum_log_likelihood_objective(restore_jitter=False).numpy()
     upper = exp.model.upper_bound().numpy()
-    return lml, upper, 0.0, 0.0
+    # rmse = np.mean((exp.model.predict_f(exp.X_test)[0].numpy() - exp.Y_test) ** 2.0) ** 0.5
+    # nlpp = -np.mean(exp.model.predict_log_density((exp.X_test, exp.Y_test)))
+    return lml, upper, None, None
 
 
 for dataset_name in dataset_names:

@@ -277,10 +277,10 @@ class GaussianProcessUciExperiment(UciExperiment):
                         lengthscales=np.ones(self.X_train.shape[1])) + gpflow.kernels.Linear()
             )
         else:
-            try:
-                kernel = getattr(gpflow.kernels, self.kernel_name)(lengthscales=np.ones(self.X_train.shape[1]))
-            except:
-                raise NotImplementedError
+            # try:
+            kernel = getattr(gpflow.kernels, self.kernel_name)(lengthscales=np.ones(self.X_train.shape[1]))
+            # except:
+            #     raise NotImplementedError(f"Kernel `{self.kernel_name}` is unknown.")
 
         return kernel
 

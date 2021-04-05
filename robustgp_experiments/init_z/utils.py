@@ -50,7 +50,13 @@ uci_train_settings = dict(
     Wilson_forest=([10, 100, 200, 400], {"kernel_name": "SquaredExponentialLinear"}),  # Bad
     Wilson_energy=([10, 30, 40, 50, 60, 70, 80, 90, 100, 200, 500], {}),  # Good
     Wilson_stock=([10, 50, 100, 200, 400, 450], {"kernel_name": "SquaredExponentialLinear"}),  # Mostly linear
-    Wilson_housing=([100, 200, 300, 400], {})  # Bad
+    Wilson_housing=([100, 200, 300, 400], {}),  # Bad
+    Wilson_yacht=([10, 20, 50, 100, 200, 250], {}),
+    Wilson_autompg=([10, 20, 50, 100, 200, 250], {}),
+    Wilson_servo=([10, 20, 30, 40, 50, 70, 100, 110, 120, 130, 140], {}),
+    Wilson_breastcancer=([10, 50, 100, 150], {}),
+    Wilson_autos=([10, 20, 50, 100], {}),
+    Wilson_concreteslump=([10, 20, 50, 60, 70], {})
 )
 
 bad_datasets = ["Wilson_housing", "Wilson_forest"]
